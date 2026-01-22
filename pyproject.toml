@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "codesub"
+version = "0.1.0"
+description = "Subscribe to file line ranges and detect changes via git diff"
+authors = ["Developer"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "codesub", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-cov = ">=4.0"
+
+[tool.poetry.scripts]
+codesub = "codesub.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
