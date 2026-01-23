@@ -63,6 +63,48 @@ task help
 The backend API runs at `http://127.0.0.1:8000` with docs at `/docs`.
 The frontend runs at `http://localhost:5173`.
 
+## Frontend Usage
+
+The web UI provides a visual interface for managing subscriptions across multiple projects.
+
+### Getting Started
+
+```bash
+# Start both servers
+task dev
+
+# Set up the mock repository for testing
+task mock:init
+
+# Open http://localhost:5173 in your browser
+```
+
+### Managing Projects
+
+1. **Add a project**: Click "Add Project" and enter the path to a git repository with codesub initialized
+2. **Switch projects**: Use the project selector dropdown in the header
+3. **Remove a project**: Click the trash icon next to the project name
+
+### Managing Subscriptions
+
+1. **View subscriptions**: The main panel shows all subscriptions for the selected project
+2. **Add subscription**: Click "Add Subscription", enter file path and line range (e.g., `src/api.py:10-25`)
+3. **Filter by status**: Use the status filter to show active, inactive, or all subscriptions
+4. **View details**: Click on a subscription to see its full details, anchors, and code preview
+5. **Deactivate/Reactivate**: Use the toggle in the subscription detail view
+
+### Running Scans
+
+1. **Run a scan**: Click the "Scan" button to compare baseline against HEAD
+2. **View results**: Triggered subscriptions are highlighted with their trigger reasons
+3. **Apply updates**: If line shifts are detected, review and apply proposed updates
+
+### Scan History
+
+1. **View history**: Click "History" to see past scan results for the project
+2. **Review past scans**: Click on a scan entry to see its details
+3. **Clear history**: Use the clear button to remove old scan results
+
 ### Interactive Shell
 
 ```bash
