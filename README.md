@@ -2,6 +2,44 @@
 
 Subscribe to file line ranges and detect changes via git diff.
 
+## What is codesub?
+
+codesub is a code monitoring tool that lets you track specific sections of code across your codebase. Instead of watching entire files, you "subscribe" to precise line ranges that matter to you—critical functions, security-sensitive code, configuration blocks, or API contracts.
+
+When code changes, codesub detects which subscriptions are affected and automatically adjusts line numbers when surrounding code shifts. This makes it useful for:
+
+- **Code reviews**: Get notified when critical sections change in a PR
+- **Documentation**: Keep external docs in sync with code by tracking referenced line ranges
+- **Security audits**: Monitor sensitive code paths for unexpected modifications
+- **Onboarding**: Highlight important code sections for new team members
+- **CI/CD gates**: Fail builds when protected code changes without review
+
+## How to Use
+
+1. **Initialize** codesub in any git repository:
+   ```bash
+   codesub init
+   ```
+
+2. **Subscribe** to code sections you want to track:
+   ```bash
+   codesub add src/auth.py:42-50 --label "Password validation"
+   codesub add config.py:10-25 --label "Database settings"
+   ```
+
+3. **Scan** for changes against your baseline (default: last commit):
+   ```bash
+   codesub scan
+   ```
+
+4. **Review** triggered subscriptions and apply line-shift updates:
+   ```bash
+   codesub scan --write-updates updates.json
+   codesub apply-updates updates.json
+   ```
+
+You can also use the web UI (`task dev`) to visually manage subscriptions across multiple projects, run scans, and review history.
+
 ## Prerequisites
 
 - Python 3.10+
