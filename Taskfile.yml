@@ -1,0 +1,697 @@
+# Taskfile for codesub - Code Subscription Tool
+# https://taskfile.dev
+
+version: '3'
+
+set: [pipefail]
+
+vars:
+  # Project paths
+  BACKEND_DIR: '{{.ROOT_DIR}}'
+  FRONTEND_DIR: '{{.ROOT_DIR}}/frontend'
+
+  # Poetry venv python - for running from any directory
+  PYTHON:
+    sh: cd {{.ROOT_DIR}} && poetry env info --executable
+
+  # Codesub CLI command
+  CODESUB: '{{.PYTHON}} -m codesub.cli'
+
+  # Server settings
+  API_HOST: '{{.API_HOST | default "127.0.0.1"}}'
+  API_PORT: '{{.API_PORT | default "8000"}}'
+  FRONTEND_PORT: '{{.FRONTEND_PORT | default "5173"}}'
+
+env:
+  PYTHONPATH: '{{.ROOT_DIR}}/src'
+
+tasks:
+  # =============================================================================
+  # DEFAULT / HELP
+  # =============================================================================
+  default:
+    desc: Start development servers (backend + frontend)
+    deps: [setup]
+    cmds:
+      - task: dev:all
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # =============================================================================
+  # SETUP & INSTALLATION
+  # =============================================================================
+  setup:
+    desc: Install all dependencies (backend + frontend)
+    deps: [setup:backend, setup:frontend]
+
+  setup:backend:
+    desc: Install Python dependencies via Poetry
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry install
+    sources:
+      - pyproject.toml
+      - poetry.lock
+    generates:
+      - .venv/**/*
+
+  setup:frontend:
+    desc: Install frontend dependencies via npm
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm install
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/**/*
+
+  # =============================================================================
+  # DEVELOPMENT SERVERS
+  # =============================================================================
+  dev:
+    desc: Start both backend and frontend servers (use Ctrl+C to stop)
+    aliases: [start]
+    deps: [setup]
+    cmds:
+      - task: dev:all
+
+  dev:all:
+    desc: Run backend and frontend in parallel
+    cmds:
+      - echo "Starting backend on http://{{.API_HOST}}:{{.API_PORT}}"
+      - echo "Starting frontend on http://localhost:{{.FRONTEND_PORT}}"
+      - echo "Press Ctrl+C to stop all servers"
+      - |
+        trap 'kill $(jobs -p) 2>/dev/null' EXIT
+        task dev:backend &
+        task dev:frontend &
+        wait
+
+  dev:backend:
+    desc: Start the FastAPI backend server
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run codesub serve --host {{.API_HOST}} --port {{.API_PORT}} --reload
+
+  dev:frontend:
+    desc: Start the Vite frontend dev server
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run dev
+
+  stop:
+    desc: Stop running backend and frontend servers
+    cmds:
+      - |
+        echo "Stopping codesub servers..."
+        # Kill by process name
+        pkill -f "codesub serve" 2>/dev/null || true
+        pkill -f "uvicorn.*codesub" 2>/dev/null || true
+        # Kill by port (backend: 8000, frontend: 5173)
+        lsof -ti:{{.API_PORT}} 2>/dev/null | xargs kill -9 2>/dev/null && echo "  Backend stopped (port {{.API_PORT}})" || echo "  Backend not running"
+        lsof -ti:{{.FRONTEND_PORT}} 2>/dev/null | xargs kill -9 2>/dev/null && echo "  Frontend stopped (port {{.FRONTEND_PORT}})" || echo "  Frontend not running"
+        echo "Done"
+
+  # =============================================================================
+  # INTERACTIVE SHELL
+  # =============================================================================
+  shell:
+    desc: Start an interactive Python shell with codesub loaded
+    dir: '{{.BACKEND_DIR}}'
+    interactive: true
+    cmds:
+      - |
+        poetry run python -c "
+        try:
+            import IPython
+            IPython.start_ipython(argv=[], user_ns={
+                'ConfigStore': __import__('codesub.config_store', fromlist=['ConfigStore']).ConfigStore,
+                'GitRepo': __import__('codesub.git_repo', fromlist=['GitRepo']).GitRepo,
+                'Detector': __import__('codesub.detector', fromlist=['Detector']).Detector,
+                'Subscription': __import__('codesub.models', fromlist=['Subscription']).Subscription,
+            })
+        except ImportError:
+            print('IPython not installed. Starting regular Python shell...')
+            print('Tip: Run \"poetry add --group dev ipython\" to install IPython')
+            import code
+            from codesub.config_store import ConfigStore
+            from codesub.git_repo import GitRepo
+            from codesub.detector import Detector
+            from codesub.models import Subscription
+            code.interact(local=locals())
+        "
+
+  shell:simple:
+    desc: Start a basic Python shell (no IPython)
+    dir: '{{.BACKEND_DIR}}'
+    interactive: true
+    cmds:
+      - |
+        poetry run python -c "
+        import code
+        from codesub.config_store import ConfigStore
+        from codesub.git_repo import GitRepo
+        from codesub.detector import Detector
+        from codesub.models import Subscription
+        print('Available: ConfigStore, GitRepo, Detector, Subscription')
+        code.interact(local=locals())
+        "
+
+  # =============================================================================
+  # TESTING
+  # =============================================================================
+  test:
+    desc: Run all tests
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run pytest {{.CLI_ARGS}}
+
+  test:watch:
+    desc: Run tests in watch mode (requires pytest-watch)
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run pytest-watch -- {{.CLI_ARGS}}
+
+  test:cov:
+    desc: Run tests with coverage report
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run pytest --cov=codesub --cov-report=term-missing --cov-report=html {{.CLI_ARGS}}
+
+  test:unit:
+    desc: Run only unit tests (exclude integration)
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run pytest -m "not integration" {{.CLI_ARGS}}
+
+  test:integration:
+    desc: Run only integration tests
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run pytest -m integration {{.CLI_ARGS}}
+
+  # =============================================================================
+  # LINTING & FORMATTING
+  # =============================================================================
+  lint:
+    desc: Run all linters
+    deps: [lint:ruff, lint:mypy]
+
+  lint:ruff:
+    desc: Run ruff linter
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - cmd: poetry run ruff check src tests {{.CLI_ARGS}}
+        ignore_error: true
+
+  lint:mypy:
+    desc: Run mypy type checker
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - cmd: poetry run mypy src {{.CLI_ARGS}}
+        ignore_error: true
+
+  format:
+    desc: Format code with ruff
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run ruff format src tests
+      - poetry run ruff check --fix src tests
+
+  format:check:
+    desc: Check code formatting without making changes
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry run ruff format --check src tests
+      - poetry run ruff check src tests
+
+  # =============================================================================
+  # BUILD
+  # =============================================================================
+  build:
+    desc: Build both backend and frontend
+    deps: [build:backend, build:frontend]
+
+  build:backend:
+    desc: Build the Python package
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - poetry build
+
+  build:frontend:
+    desc: Build the frontend for production
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run build
+
+  # =============================================================================
+  # CODESUB OPERATIONS - Init & Subscriptions
+  # =============================================================================
+  codesub:init:
+    desc: "Initialize codesub in a target project"
+    summary: |
+      Initialize codesub in the specified project directory.
+
+      Usage:
+        task codesub:init -- /path/to/project
+        task codesub:init TARGET=/path/to/project
+        task codesub:init -- /path/to/project --baseline main
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      _FIRST_ARG:
+        sh: echo '{{.CLI_ARGS}}' | awk '{print $1}'
+      _REST_ARGS:
+        sh: echo '{{.CLI_ARGS}}' | awk '{$1=""; print $0}' | sed 's/^ //'
+      _TARGET_DIR:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ]; then
+            echo "$target"
+          elif [ -n "$first" ] && [ "${first#-}" = "$first" ]; then
+            echo "$first"
+          else
+            echo "."
+          fi
+      _EXTRA_ARGS:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          rest="{{._REST_ARGS}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ] || [ -z "$first" ] || [ "${first#-}" != "$first" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            echo "$rest"
+          fi
+    dir: '{{._TARGET_DIR}}'
+    cmds:
+      - '{{.CODESUB}} init {{._EXTRA_ARGS}}'
+
+  codesub:add:
+    desc: "Add a new subscription"
+    summary: |
+      Add a subscription to track a specific line range in a file.
+
+      Usage:
+        task codesub:add -- path/to/file.py:10-20 --label "My subscription"
+        task codesub:add TARGET=/path/to/project -- file.py:10-20 --label "My subscription"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} add {{.CLI_ARGS}}'
+
+  codesub:list:
+    desc: "List all subscriptions"
+    summary: |
+      Usage:
+        task codesub:list
+        task codesub:list -- /path/to/project
+        task codesub:list TARGET=/path/to/project
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      _FIRST_ARG:
+        sh: echo '{{.CLI_ARGS}}' | awk '{print $1}'
+      _REST_ARGS:
+        sh: echo '{{.CLI_ARGS}}' | awk '{$1=""; print $0}' | sed 's/^ //'
+      _TARGET_DIR:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ]; then
+            echo "$target"
+          elif [ -n "$first" ] && [ "${first#-}" = "$first" ]; then
+            echo "$first"
+          else
+            echo "."
+          fi
+      _EXTRA_ARGS:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          rest="{{._REST_ARGS}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ] || [ -z "$first" ] || [ "${first#-}" != "$first" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            echo "$rest"
+          fi
+    dir: '{{._TARGET_DIR}}'
+    cmds:
+      - '{{.CODESUB}} list {{._EXTRA_ARGS}}'
+
+  codesub:list:verbose:
+    desc: "List all subscriptions with details"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} list --verbose'
+
+  codesub:list:json:
+    desc: "List all subscriptions as JSON"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} list --json'
+
+  codesub:remove:
+    desc: "Remove a subscription"
+    summary: |
+      Remove (deactivate) a subscription by ID.
+
+      Usage:
+        task codesub:remove -- <subscription_id>
+        task codesub:remove TARGET=/path/to/project -- <subscription_id> --hard
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} remove {{.CLI_ARGS}}'
+
+  # =============================================================================
+  # CODESUB OPERATIONS - Scanning & Detection
+  # =============================================================================
+  codesub:scan:
+    desc: "Scan for triggered subscriptions"
+    summary: |
+      Scan for changes that trigger subscriptions.
+
+      Usage:
+        task codesub:scan
+        task codesub:scan -- /path/to/project
+        task codesub:scan TARGET=/path/to/project
+        task codesub:scan -- /path/to/project --base HEAD~1
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      _FIRST_ARG:
+        sh: echo '{{.CLI_ARGS}}' | awk '{print $1}'
+      _REST_ARGS:
+        sh: echo '{{.CLI_ARGS}}' | awk '{$1=""; print $0}' | sed 's/^ //'
+      _TARGET_DIR:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ]; then
+            echo "$target"
+          elif [ -n "$first" ] && [ "${first#-}" = "$first" ]; then
+            echo "$first"
+          else
+            echo "."
+          fi
+      _EXTRA_ARGS:
+        sh: |
+          first="{{._FIRST_ARG}}"
+          rest="{{._REST_ARGS}}"
+          target="{{.TARGET}}"
+          if [ "$target" != "." ] || [ -z "$first" ] || [ "${first#-}" != "$first" ]; then
+            echo "{{.CLI_ARGS}}"
+          else
+            echo "$rest"
+          fi
+    dir: '{{._TARGET_DIR}}'
+    cmds:
+      - '{{.CODESUB}} scan {{._EXTRA_ARGS}}'
+
+  codesub:scan:last-commit:
+    desc: "Check subscriptions against last commit"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} scan --base HEAD~1 --target HEAD {{.CLI_ARGS}}'
+
+  codesub:scan:staged:
+    desc: "Check subscriptions against staged changes"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - echo "Note - codesub compares git refs. For staged changes, commit first then scan."
+      - '{{.CODESUB}} scan {{.CLI_ARGS}}'
+
+  codesub:scan:commits:
+    desc: "Scan a range of commits"
+    summary: |
+      Scan subscriptions between two commits.
+
+      Usage:
+        task codesub:scan:commits BASE=abc123 HEAD=def456
+        task codesub:scan:commits TARGET=/path/to/project BASE=main HEAD=feature-branch
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    requires:
+      vars: [BASE, HEAD]
+    cmds:
+      - '{{.CODESUB}} scan --base {{.BASE}} --target {{.HEAD}} {{.CLI_ARGS}}'
+
+  codesub:scan:mr:
+    desc: "Scan changes in a merge/pull request"
+    summary: |
+      Check subscriptions for changes in a merge request.
+
+      Usage:
+        task codesub:scan:mr BASE=main HEAD=feature-branch
+        task codesub:scan:mr TARGET=/path/to/project BASE=main HEAD=feature-branch
+
+      For GitLab CI:
+        task codesub:scan:mr BASE=$CI_MERGE_REQUEST_TARGET_BRANCH_SHA HEAD=$CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+
+      For GitHub Actions:
+        task codesub:scan:mr BASE=${{ github.event.pull_request.base.sha }} HEAD=${{ github.event.pull_request.head.sha }}
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    requires:
+      vars: [BASE, HEAD]
+    cmds:
+      - '{{.CODESUB}} scan --base {{.BASE}} --target {{.HEAD}} {{.CLI_ARGS}}'
+
+  codesub:scan:json:
+    desc: "Scan and output as JSON"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} scan --json {{.CLI_ARGS}}'
+
+  codesub:scan:write:
+    desc: "Scan and write update document"
+    summary: |
+      Scan and write proposals to a JSON file for later review/apply.
+
+      Usage:
+        task codesub:scan:write
+        task codesub:scan:write TARGET=/path/to/project OUTPUT=updates.json
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      OUTPUT: '{{.OUTPUT | default "codesub-updates.json"}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} scan --write-updates {{.OUTPUT}} {{.CLI_ARGS}}'
+      - echo "Update document written to {{.OUTPUT}}"
+
+  codesub:scan:ci:
+    desc: "Scan with CI-friendly exit code"
+    summary: |
+      Scan and exit with code 2 if any subscriptions are triggered.
+      Useful for CI pipelines to fail builds on subscription triggers.
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} scan --fail-on-trigger {{.CLI_ARGS}}'
+
+  # =============================================================================
+  # CODESUB OPERATIONS - Apply Updates
+  # =============================================================================
+  codesub:apply:
+    desc: "Apply update proposals from a document"
+    summary: |
+      Apply subscription updates from a JSON document.
+
+      Usage:
+        task codesub:apply
+        task codesub:apply TARGET=/path/to/project DOC=updates.json
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      DOC: '{{.DOC | default "codesub-updates.json"}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} apply-updates {{.DOC}} {{.CLI_ARGS}}'
+
+  codesub:apply:dry:
+    desc: "Preview update application (dry run)"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+      DOC: '{{.DOC | default "codesub-updates.json"}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - '{{.CODESUB}} apply-updates {{.DOC}} --dry-run'
+
+  # =============================================================================
+  # CODESUB WORKFLOW HELPERS
+  # =============================================================================
+  codesub:status:
+    desc: "Show codesub status (list + scan summary)"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - echo "=== Subscriptions ==="
+      - '{{.CODESUB}} list'
+      - echo ""
+      - echo "=== Scan Results ==="
+      - '{{.CODESUB}} scan'
+
+  codesub:check:
+    desc: "Quick check - any subscriptions triggered?"
+    vars:
+      TARGET: '{{.TARGET | default "."}}'
+    dir: '{{.TARGET}}'
+    cmds:
+      - |
+        output=$({{.CODESUB}} scan --json 2>&1)
+        if echo "$output" | grep -q "No changes to scan"; then
+          echo "OK: No changes to scan (base == target)"
+          exit 0
+        fi
+        echo "$output" | {{.PYTHON}} -c "
+        import json, sys
+        data = json.load(sys.stdin)
+        triggers = data.get('triggers', [])
+        if triggers:
+            print(f'WARNING: {len(triggers)} subscription(s) triggered!')
+            for t in triggers:
+                sub = t['subscription']
+                label = f\" [{sub.get('label')}]\" if sub.get('label') else ''
+                print(f\"  - {sub['id'][:8]}{label}: {', '.join(t['reasons'])}\")
+            sys.exit(1)
+        else:
+            print('OK: No subscriptions triggered.')
+        "
+
+  # =============================================================================
+  # CLEAN
+  # =============================================================================
+  clean:
+    desc: Clean build artifacts and caches
+    cmds:
+      - task: clean:backend
+      - task: clean:frontend
+
+  clean:backend:
+    desc: Clean Python build artifacts
+    dir: '{{.BACKEND_DIR}}'
+    cmds:
+      - rm -rf dist/ build/ *.egg-info/
+      - rm -rf .pytest_cache/ .mypy_cache/ .ruff_cache/
+      - rm -rf htmlcov/ .coverage
+      - find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+  clean:frontend:
+    desc: Clean frontend build artifacts
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - rm -rf dist/
+
+  clean:all:
+    desc: Clean everything including dependencies
+    cmds:
+      - task: clean
+      - rm -rf {{.BACKEND_DIR}}/.venv
+      - rm -rf {{.FRONTEND_DIR}}/node_modules
+
+  # =============================================================================
+  # UTILITIES
+  # =============================================================================
+  version:
+    desc: Show codesub version
+    cmds:
+      - poetry run codesub --version
+
+  docs:
+    desc: Generate and serve documentation (if configured)
+    cmds:
+      - echo "Documentation generation not yet configured"
+      - echo "Add mkdocs or sphinx configuration to enable this task"
+
+  ci:
+    desc: Run CI checks (lint + test)
+    cmds:
+      - task: lint
+      - task: test
+
+  pre-commit:
+    desc: Run pre-commit checks
+    cmds:
+      - task: format:check
+      - task: lint
+      - task: test:unit
+
+  # =============================================================================
+  # MOCK REPOSITORY
+  # =============================================================================
+  mock:init:
+    desc: Initialize mock_repo for testing (git + register project + sample subscription)
+    summary: |
+      Sets up the mock repository for testing codesub:
+      1. Initializes git (renames .git_template to .git)
+      2. Registers the project with codesub
+      3. Creates a sample subscription to database config
+
+      Usage:
+        task mock:init
+    vars:
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repo'
+    cmds:
+      - |
+        # Step 1: Initialize git repo
+        if [ -d "{{.MOCK_DIR}}/.git_template" ]; then
+          echo "Initializing mock_repo git..."
+          mv "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
+          echo "  Git initialized"
+        elif [ -d "{{.MOCK_DIR}}/.git" ]; then
+          echo "  Git already initialized"
+        else
+          echo "Error: No .git or .git_template found in mock_repo"
+          exit 1
+        fi
+      - |
+        # Step 2: Register project
+        echo "Registering mock_repo project..."
+        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo" 2>/dev/null || echo "  Already registered"
+      - |
+        # Step 3: Initialize codesub in mock_repo
+        echo "Initializing codesub in mock_repo..."
+        cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
+      - |
+        # Step 4: Create sample subscription
+        echo "Creating sample subscription (Database Config)..."
+        cd "{{.MOCK_DIR}}" && {{.CODESUB}} add config.py:5-9 --label "Database Config" 2>/dev/null || echo "  Subscription may already exist"
+      - |
+        echo ""
+        echo "Mock repo ready! You can now:"
+        echo "  - Start the UI: task dev"
+        echo "  - Modify mock_repo/config.py and run: task codesub:scan TARGET=mock_repo"
+        echo "  - Add more subscriptions via UI or CLI"
+
+  mock:reset:
+    desc: Reset mock_repo to clean state (remove .git, .codesub)
+    vars:
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repo'
+    cmds:
+      - |
+        echo "Resetting mock_repo..."
+        if [ -d "{{.MOCK_DIR}}/.git" ]; then
+          mv "{{.MOCK_DIR}}/.git" "{{.MOCK_DIR}}/.git_template"
+          echo "  Reverted .git to .git_template"
+        fi
+        rm -rf "{{.MOCK_DIR}}/.codesub"
+        echo "  Removed .codesub"
+        echo "Done. Run 'task mock:init' to set up again."

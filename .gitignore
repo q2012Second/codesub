@@ -47,8 +47,18 @@ htmlcov/
 # mypy
 .mypy_cache/
 
-# codesub local state (keep in individual repos, not in this tool's repo)
-# .codesub/
+# codesub local state
+.codesub/
+
+# Task runner
+.task/
+tasks/
 
 # Claude Code local settings
 .claude/
+
+# Server data (projects, scan history)
+data/
+
+# Node.js
+node_modules/

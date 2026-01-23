@@ -89,3 +89,28 @@ class InvalidLineRangeError(CodesubError):
         self.start = start
         self.end = end
         super().__init__(f"Invalid line range {start}-{end}: {reason}")
+
+
+class ProjectNotFoundError(CodesubError):
+    """Raised when a project ID doesn't exist."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        super().__init__(f"Project not found: {project_id}")
+
+
+class InvalidProjectPathError(CodesubError):
+    """Raised when a project path is invalid."""
+
+    def __init__(self, path: str, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"Invalid project path '{path}': {reason}")
+
+
+class ScanNotFoundError(CodesubError):
+    """Raised when a scan history entry doesn't exist."""
+
+    def __init__(self, scan_id: str):
+        self.scan_id = scan_id
+        super().__init__(f"Scan not found: {scan_id}")

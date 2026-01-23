@@ -42,6 +42,30 @@ class GitRepo:
         """Get the current HEAD commit hash."""
         return self.resolve_ref("HEAD")
 
+    def commit_title(self, ref: str, max_length: int = 50) -> str:
+        """
+        Get the commit title (subject line) for a ref.
+
+        Args:
+            ref: Git ref (commit hash, branch name, etc.).
+            max_length: Maximum length before truncation (0 = no limit).
+
+        Returns:
+            Commit subject line, possibly truncated with "...".
+        """
+        result = subprocess.run(
+            ["git", "log", "--format=%s", "-n", "1", ref],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return ""
+        title = result.stdout.strip()
+        if max_length > 0 and len(title) > max_length:
+            title = title[: max_length - 3] + "..."
+        return title
+
     def resolve_ref(self, ref: str) -> str:
         """
         Resolve a git ref to a full commit hash.
@@ -101,48 +125,57 @@ class GitRepo:
             return []
         return content.split("\n")
 
-    def diff_patch(self, base: str, target: str) -> str:
+    def diff_patch(self, base: str, target: str | None = None) -> str:
         """
-        Get unified diff between two refs.
+        Get unified diff between two refs, or between a ref and working directory.
 
         Uses -U0 for minimal context (just hunks).
 
         Args:
             base: Base ref.
-            target: Target ref.
+            target: Target ref, or None/empty for working directory.
 
         Returns:
             Diff text (may be empty if no changes).
         """
+        if target:
+            cmd = ["git", "diff", "-U0", "--find-renames", base, target]
+        else:
+            # Compare base to working directory (uncommitted changes)
+            cmd = ["git", "diff", "-U0", "--find-renames", base]
         result = subprocess.run(
-            ["git", "diff", "-U0", "--find-renames", base, target],
+            cmd,
             cwd=self.root,
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            raise GitError(f"git diff {base} {target}", result.stderr.strip())
+            raise GitError(f"git diff {base} {target or '(working)'}", result.stderr.strip())
         return result.stdout
 
-    def diff_name_status(self, base: str, target: str) -> str:
+    def diff_name_status(self, base: str, target: str | None = None) -> str:
         """
-        Get name-status diff between two refs for rename detection.
+        Get name-status diff between two refs, or between a ref and working directory.
 
         Args:
             base: Base ref.
-            target: Target ref.
+            target: Target ref, or None/empty for working directory.
 
         Returns:
             Name-status output text.
         """
+        if target:
+            cmd = ["git", "diff", "--name-status", "-M", "--find-renames", base, target]
+        else:
+            cmd = ["git", "diff", "--name-status", "-M", "--find-renames", base]
         result = subprocess.run(
-            ["git", "diff", "--name-status", "-M", "--find-renames", base, target],
+            cmd,
             cwd=self.root,
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            raise GitError(f"git diff --name-status {base} {target}", result.stderr.strip())
+            raise GitError(f"git diff --name-status {base} {target or '(working)'}", result.stderr.strip())
         return result.stdout
 
     def file_line_count(self, ref: str, path: str) -> int:

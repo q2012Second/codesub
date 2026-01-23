@@ -241,3 +241,90 @@ class ScanResult:
     triggers: list[Trigger]
     proposals: list[Proposal]
     unchanged: list[Subscription]  # Subscriptions with no changes or shifts
+
+
+# Models for multi-project management
+
+
+@dataclass
+class Project:
+    """A registered project (git repository with codesub initialized)."""
+
+    id: str
+    name: str  # Display name (defaults to repo directory name)
+    path: str  # Absolute path to the repository root
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Project":
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            path=data["path"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(cls, name: str, path: str) -> "Project":
+        """Create a new project with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            name=name,
+            path=path,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class ScanHistoryEntry:
+    """A persisted scan result."""
+
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+    scan_result: dict[str, Any]  # Full ScanResult as dict
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "base_ref": self.base_ref,
+            "target_ref": self.target_ref,
+            "trigger_count": self.trigger_count,
+            "proposal_count": self.proposal_count,
+            "unchanged_count": self.unchanged_count,
+            "created_at": self.created_at,
+            "scan_result": self.scan_result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScanHistoryEntry":
+        return cls(
+            id=data["id"],
+            project_id=data["project_id"],
+            base_ref=data["base_ref"],
+            target_ref=data["target_ref"],
+            trigger_count=data["trigger_count"],
+            proposal_count=data["proposal_count"],
+            unchanged_count=data["unchanged_count"],
+            created_at=data["created_at"],
+            scan_result=data["scan_result"],
+        )

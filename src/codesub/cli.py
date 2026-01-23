@@ -11,6 +11,8 @@ from .errors import CodesubError
 from .git_repo import GitRepo
 from .models import Anchor, Subscription
 from .utils import extract_anchors, format_subscription, parse_location
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
 
 
 def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
@@ -284,6 +286,124 @@ def cmd_apply_updates(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_projects_list(args: argparse.Namespace) -> int:
+    """List registered projects."""
+    try:
+        store = ProjectStore()
+        projects = store.list_projects()
+
+        if not projects:
+            print("No projects registered.")
+            print("Add a project with: codesub projects add <path>")
+            return 0
+
+        if args.json:
+            data = [p.to_dict() for p in projects]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Projects ({len(projects)}):")
+            print()
+            for p in projects:
+                print(f"  {p.id[:8]}  {p.name}")
+                print(f"           {p.path}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_add(args: argparse.Namespace) -> int:
+    """Add a project."""
+    try:
+        store = ProjectStore()
+        project = store.add_project(path=args.path, name=args.name)
+
+        print(f"Added project: {project.id[:8]}")
+        print(f"  Name: {project.name}")
+        print(f"  Path: {project.path}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_remove(args: argparse.Namespace) -> int:
+    """Remove a project."""
+    try:
+        store = ProjectStore()
+        project = store.remove_project(args.project_id)
+
+        print(f"Removed project: {project.id[:8]} ({project.name})")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan_history_clear(args: argparse.Namespace) -> int:
+    """Clear scan history."""
+    try:
+        history = ScanHistory()
+
+        if args.project:
+            count = history.clear_project_history(args.project)
+            print(f"Cleared {count} scan(s) for project {args.project[:8]}")
+        else:
+            count = history.clear_all_history()
+            print(f"Cleared {count} scan(s) from all projects")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the API server."""
+    try:
+        import uvicorn
+
+        # Verify we're in a git repo
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        if not store.exists():
+            print("Warning: codesub not initialized. Run 'codesub init' first.", file=sys.stderr)
+            print("Starting server anyway...", file=sys.stderr)
+
+        print("Starting codesub API server...")
+        print(f"Repository: {repo.root}")
+        print(f"API docs: http://{args.host}:{args.port}/docs")
+        print()
+
+        # When reload is enabled, uvicorn requires the app as an import string
+        app_target = "codesub.api:app" if args.reload else None
+        if app_target is None:
+            from .api import app
+            app_target = app
+
+        uvicorn.run(
+            app_target,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+            workers=1,  # Single worker to avoid concurrent write issues
+        )
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -369,6 +489,45 @@ def create_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Show what would be done without applying"
     )
 
+    # serve
+    serve_parser = subparsers.add_parser("serve", help="Start the API server")
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", "-p", type=int, default=8000, help="Port to bind to (default: 8000)"
+    )
+    serve_parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload for development"
+    )
+
+    # projects (subcommand group)
+    projects_parser = subparsers.add_parser("projects", help="Manage registered projects")
+    projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
+
+    # projects list
+    projects_list_parser = projects_subparsers.add_parser("list", help="List registered projects")
+    projects_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # projects add
+    projects_add_parser = projects_subparsers.add_parser("add", help="Add a project")
+    projects_add_parser.add_argument("path", help="Path to git repository")
+    projects_add_parser.add_argument("--name", "-n", help="Display name (defaults to dir name)")
+
+    # projects remove
+    projects_remove_parser = projects_subparsers.add_parser("remove", help="Remove a project")
+    projects_remove_parser.add_argument("project_id", help="Project ID")
+
+    # scan-history
+    scan_history_parser = subparsers.add_parser("scan-history", help="Manage scan history")
+    scan_history_subparsers = scan_history_parser.add_subparsers(dest="scan_history_command")
+
+    # scan-history clear
+    scan_history_clear_parser = scan_history_subparsers.add_parser("clear", help="Clear scan history")
+    scan_history_clear_parser.add_argument(
+        "--project", "-p", help="Clear only for specific project ID"
+    )
+
     return parser
 
 
@@ -381,6 +540,26 @@ def main() -> int:
         parser.print_help()
         return 0
 
+    # Handle projects subcommands
+    if args.command == "projects":
+        if not hasattr(args, "projects_command") or not args.projects_command:
+            parser.parse_args(["projects", "--help"])
+            return 0
+        if args.projects_command == "list":
+            return cmd_projects_list(args)
+        elif args.projects_command == "add":
+            return cmd_projects_add(args)
+        elif args.projects_command == "remove":
+            return cmd_projects_remove(args)
+
+    # Handle scan-history subcommands
+    if args.command == "scan-history":
+        if not hasattr(args, "scan_history_command") or not args.scan_history_command:
+            parser.parse_args(["scan-history", "--help"])
+            return 0
+        if args.scan_history_command == "clear":
+            return cmd_scan_history_clear(args)
+
     commands = {
         "init": cmd_init,
         "add": cmd_add,
@@ -388,6 +567,7 @@ def main() -> int:
         "remove": cmd_remove,
         "scan": cmd_scan,
         "apply-updates": cmd_apply_updates,
+        "serve": cmd_serve,
     }
 
     cmd_func = commands.get(args.command)

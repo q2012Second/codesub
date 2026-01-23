@@ -16,15 +16,15 @@ class Detector:
         self,
         subscriptions: list[Subscription],
         base_ref: str,
-        target_ref: str,
+        target_ref: str | None = None,
     ) -> ScanResult:
         """
-        Scan for changes between two refs and classify subscriptions.
+        Scan for changes between two refs, or between a ref and working directory.
 
         Args:
             subscriptions: List of subscriptions to check.
             base_ref: Base git ref.
-            target_ref: Target git ref.
+            target_ref: Target git ref, or None/empty for working directory.
 
         Returns:
             ScanResult with triggers, proposals, and unchanged subscriptions.
@@ -32,10 +32,13 @@ class Detector:
         # Only process active subscriptions
         active_subs = [s for s in subscriptions if s.active]
 
+        # Use "WORKING" to represent working directory
+        display_target = target_ref or "WORKING"
+
         if not active_subs:
             return ScanResult(
                 base_ref=base_ref,
-                target_ref=target_ref,
+                target_ref=display_target,
                 triggers=[],
                 proposals=[],
                 unchanged=[],
@@ -87,7 +90,7 @@ class Detector:
 
         return ScanResult(
             base_ref=base_ref,
-            target_ref=target_ref,
+            target_ref=display_target,
             triggers=triggers,
             proposals=proposals,
             unchanged=unchanged,
