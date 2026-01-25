@@ -46,8 +46,33 @@ export async function createSubscription(data: SubscriptionCreateRequest): Promi
   return handleResponse<Subscription>(response);
 }
 
+export async function createProjectSubscription(
+  projectId: string,
+  data: SubscriptionCreateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
 export async function updateSubscription(id: string, data: SubscriptionUpdateRequest): Promise<Subscription> {
   const response = await fetch(`${API_BASE}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function updateProjectSubscription(
+  projectId: string,
+  id: string,
+  data: SubscriptionUpdateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -61,8 +86,28 @@ export async function deleteSubscription(id: string, hard: boolean = false): Pro
   return handleResponse<Subscription>(response);
 }
 
+export async function deleteProjectSubscription(
+  projectId: string,
+  id: string,
+  hard: boolean = false
+): Promise<Subscription> {
+  const url = `${API_BASE}/projects/${projectId}/subscriptions/${id}?hard=${hard}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  return handleResponse<Subscription>(response);
+}
+
 export async function reactivateSubscription(id: string): Promise<Subscription> {
   const response = await fetch(`${API_BASE}/subscriptions/${id}/reactivate`, {
+    method: 'POST',
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function reactivateProjectSubscription(
+  projectId: string,
+  id: string
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}/reactivate`, {
     method: 'POST',
   });
   return handleResponse<Subscription>(response);

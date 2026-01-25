@@ -510,6 +510,96 @@ def list_project_subscriptions(
     )
 
 
+@app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
+    """Create a new subscription in a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Parse and validate location
+    path, start_line, end_line = parse_location(request.location)
+
+    # Validate file exists at baseline
+    baseline = config.repo.baseline_ref
+    lines = repo.show_file(baseline, path)
+
+    # Validate line range
+    if end_line > len(lines):
+        raise InvalidLineRangeError(
+            start_line, end_line, f"exceeds file length ({len(lines)} lines)"
+        )
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, start_line, end_line, context=request.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=path,
+        start_line=start_line,
+        end_line=end_line,
+        label=request.label,
+        description=request.description,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_project_subscription(project_id: str, sub_id: str):
+    """Get a single subscription by ID within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_project_subscription(project_id: str, sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    update_data = request.model_dump(exclude_unset=True)
+
+    if "label" in update_data:
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        sub.description = request.description if request.description else None
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_project_subscription(project_id: str, sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/projects/{project_id}/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_project_subscription(project_id: str, sub_id: str):
+    """Reactivate a deactivated subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
 # --- Scan Endpoints ---
 
 

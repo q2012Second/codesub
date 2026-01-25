@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import type { Subscription } from '../types';
-import { deleteSubscription, reactivateSubscription } from '../api';
+import { deleteProjectSubscription, reactivateProjectSubscription } from '../api';
 
 interface Props {
   subscription: Subscription;
+  projectId: string;
   onBack: () => void;
   onEdit: () => void;
   onDeleted: () => void;
@@ -11,7 +12,7 @@ interface Props {
   showMessage: (type: 'success' | 'error', text: string) => void;
 }
 
-export function SubscriptionDetail({ subscription: sub, onBack, onEdit, onDeleted, onReactivated, showMessage }: Props) {
+export function SubscriptionDetail({ subscription: sub, projectId, onBack, onEdit, onDeleted, onReactivated, showMessage }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [confirmHardDelete, setConfirmHardDelete] = useState(false);
 
@@ -26,7 +27,7 @@ export function SubscriptionDetail({ subscription: sub, onBack, onEdit, onDelete
     }
     try {
       setDeleting(true);
-      await deleteSubscription(sub.id, hard);
+      await deleteProjectSubscription(projectId, sub.id, hard);
       onDeleted();
     } catch (e) {
       showMessage('error', e instanceof Error ? e.message : 'Failed to delete');
@@ -36,7 +37,7 @@ export function SubscriptionDetail({ subscription: sub, onBack, onEdit, onDelete
 
   const handleReactivate = async () => {
     try {
-      await reactivateSubscription(sub.id);
+      await reactivateProjectSubscription(projectId, sub.id);
       onReactivated();
       showMessage('success', 'Subscription reactivated');
     } catch (e) {

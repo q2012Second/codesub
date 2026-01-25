@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest } from '../types';
-import { createSubscription, updateSubscription } from '../api';
+import { createProjectSubscription, updateProjectSubscription } from '../api';
 
 interface Props {
   subscription: Subscription | null;  // null = create mode
+  projectId: string;
   onCancel: () => void;
   onSaved: (sub: Subscription, isNew: boolean) => void;
   showMessage: (type: 'success' | 'error', text: string) => void;
 }
 
-export function SubscriptionForm({ subscription, onCancel, onSaved, showMessage }: Props) {
+export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, showMessage }: Props) {
   const isEdit = subscription !== null;
 
   const [location, setLocation] = useState('');
@@ -32,7 +33,7 @@ export function SubscriptionForm({ subscription, onCancel, onSaved, showMessage 
           label: label || undefined,
           description: description || undefined,
         };
-        result = await updateSubscription(subscription.id, data);
+        result = await updateProjectSubscription(projectId, subscription.id, data);
       } else {
         const data: SubscriptionCreateRequest = {
           location,
@@ -40,7 +41,7 @@ export function SubscriptionForm({ subscription, onCancel, onSaved, showMessage 
           description: description || undefined,
           context,
         };
-        result = await createSubscription(data);
+        result = await createProjectSubscription(projectId, data);
       }
 
       onSaved(result, !isEdit);

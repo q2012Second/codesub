@@ -277,9 +277,10 @@ export default function App() {
       )}
 
       {/* Subscription Detail */}
-      {view === 'detail' && selectedSub && (
+      {view === 'detail' && selectedSub && currentProjectId && (
         <SubscriptionDetail
           subscription={selectedSub}
+          projectId={currentProjectId}
           onBack={handleBack}
           onEdit={() => handleEdit(selectedSub.id)}
           onDeleted={handleDeleted}
@@ -289,9 +290,10 @@ export default function App() {
       )}
 
       {/* Subscription Form */}
-      {(view === 'create' || view === 'edit') && (
+      {(view === 'create' || view === 'edit') && currentProjectId && (
         <SubscriptionForm
           subscription={view === 'edit' ? selectedSub : null}
+          projectId={currentProjectId}
           onCancel={view === 'edit' && selectedSub ? () => setView('detail') : handleBack}
           onSaved={handleSaved}
           showMessage={showMessage}

@@ -1,6 +1,11 @@
 # Application Configuration
 # This file contains important constants and settings
 
+# Feature flags
+ENABLE_CACHING = True
+ENABLE_LOGGING = True
+DEBUG_MODE = False
+
 # Database settings
 DATABASE_HOST = "localhost"
 DATABASE_PORT = 5432
