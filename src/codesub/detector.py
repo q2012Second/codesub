@@ -1,8 +1,13 @@
 """Change detection for codesub."""
 
+from typing import TYPE_CHECKING
+
 from .diff_parser import DiffParser, ranges_overlap
 from .git_repo import GitRepo
-from .models import FileDiff, Hunk, Proposal, ScanResult, Subscription, Trigger
+from .models import FileDiff, Hunk, Proposal, ScanResult, SemanticTarget, Subscription, Trigger
+
+if TYPE_CHECKING:
+    from .semantic import Construct
 
 
 class Detector:
@@ -62,6 +67,20 @@ class Detector:
         unchanged: list[Subscription] = []
 
         for sub in active_subs:
+            # Check if semantic subscription
+            if sub.semantic is not None:
+                trigger, proposal = self._check_semantic(
+                    sub, base_ref, target_ref, rename_map, status_map
+                )
+                if trigger:
+                    triggers.append(trigger)
+                if proposal:
+                    proposals.append(proposal)
+                if not trigger and not proposal:
+                    unchanged.append(sub)
+                continue
+
+            # Line-based subscription
             # Check if file was renamed
             new_path = rename_map.get(sub.path, sub.path)
             is_renamed = new_path != sub.path
@@ -265,3 +284,226 @@ class Detector:
                 # because overlapping hunks would have triggered the subscription
 
         return shift
+
+    def _check_semantic(
+        self,
+        sub: Subscription,
+        base_ref: str,
+        target_ref: str | None,
+        rename_map: dict[str, str],
+        status_map: dict[str, str],
+    ) -> tuple[Trigger | None, Proposal | None]:
+        """Check semantic subscription for changes."""
+        from .semantic import PythonIndexer
+
+        indexer = PythonIndexer()
+
+        # Resolve file rename
+        old_path = sub.path
+        new_path = rename_map.get(old_path, old_path)
+
+        # Check if file deleted
+        if status_map.get(old_path) == "D":
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=old_path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["file_deleted"],
+                    matching_hunks=[],
+                    change_type="MISSING",
+                ),
+                None,
+            )
+
+        # Get old file content
+        old_source = "\n".join(self.repo.show_file(base_ref, old_path))
+
+        # Get new file content
+        try:
+            if target_ref:
+                new_source = "\n".join(self.repo.show_file(target_ref, new_path))
+            else:
+                # Working directory
+                with open(self.repo.root / new_path) as f:
+                    new_source = f.read()
+        except Exception:
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=old_path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["file_not_found"],
+                    matching_hunks=[],
+                    change_type="MISSING",
+                ),
+                None,
+            )
+
+        assert sub.semantic is not None  # Type narrowing
+
+        # Stage 1: Exact match by qualname
+        old_construct = indexer.find_construct(
+            old_source, old_path, sub.semantic.qualname, sub.semantic.kind
+        )
+        new_construct = indexer.find_construct(
+            new_source, new_path, sub.semantic.qualname, sub.semantic.kind
+        )
+
+        if new_construct:
+            # Found by exact qualname - check for changes
+            trigger = self._classify_semantic_change(sub, old_construct, new_construct)
+            proposal = None
+
+            # Check if path changed (file renamed)
+            if old_path != new_path:
+                proposal = Proposal(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    old_path=old_path,
+                    old_start=sub.start_line,
+                    old_end=sub.end_line,
+                    new_path=new_path,
+                    new_start=new_construct.start_line,
+                    new_end=new_construct.end_line,
+                    reasons=["rename"],
+                    confidence="high",
+                )
+            elif (
+                new_construct.start_line != sub.start_line
+                or new_construct.end_line != sub.end_line
+            ):
+                proposal = Proposal(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    old_path=old_path,
+                    old_start=sub.start_line,
+                    old_end=sub.end_line,
+                    new_path=new_path,
+                    new_start=new_construct.start_line,
+                    new_end=new_construct.end_line,
+                    reasons=["line_shift"],
+                    confidence="high",
+                )
+
+            return trigger, proposal
+
+        # Stage 2: Hash-based search
+        new_constructs = indexer.index_file(new_source, new_path)
+        match = self._find_by_hash(sub.semantic, new_constructs)
+
+        if match:
+            # Found by hash - it was renamed/moved
+            trigger = self._classify_semantic_change(sub, old_construct, match)
+            proposal = Proposal(
+                subscription_id=sub.id,
+                subscription=sub,
+                old_path=old_path,
+                old_start=sub.start_line,
+                old_end=sub.end_line,
+                new_path=new_path,
+                new_start=match.start_line,
+                new_end=match.end_line,
+                reasons=["semantic_location"],
+                confidence="high",
+                new_qualname=match.qualname,
+                new_kind=match.kind,
+            )
+            return trigger, proposal
+
+        # Not found at all
+        return (
+            Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=old_path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["semantic_target_missing"],
+                matching_hunks=[],
+                change_type="MISSING",
+            ),
+            None,
+        )
+
+    def _classify_semantic_change(
+        self,
+        sub: Subscription,
+        old_construct: "Construct | None",
+        new_construct: "Construct",
+    ) -> Trigger | None:
+        """Classify change type between old and new construct."""
+        if old_construct is None or sub.semantic is None:
+            return None
+
+        old_fp = sub.semantic
+
+        # Check interface change (type/signature)
+        if old_fp.interface_hash != new_construct.interface_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["interface_changed"],
+                matching_hunks=[],
+                change_type="STRUCTURAL",
+            )
+
+        # Check body change (value/implementation)
+        if old_fp.body_hash != new_construct.body_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["body_changed"],
+                matching_hunks=[],
+                change_type="CONTENT",
+            )
+
+        # No meaningful change (cosmetic only)
+        return None
+
+    def _find_by_hash(
+        self,
+        semantic: SemanticTarget,
+        constructs: "list[Construct]",
+    ) -> "Construct | None":
+        """Find construct by hash matching."""
+        # Try exact match (both hashes)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash
+            and c.body_hash == semantic.body_hash
+            and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try body-only match (renamed + signature changed)
+        matches = [
+            c
+            for c in constructs
+            if c.body_hash == semantic.body_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try interface-only match (renamed + body changed)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        return None

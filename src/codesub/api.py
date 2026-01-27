@@ -129,6 +129,7 @@ class TriggerSchema(BaseModel):
     end_line: int
     reasons: list[str]
     label: Optional[str]
+    change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
 
 
 class ProposalSchema(BaseModel):
@@ -143,6 +144,8 @@ class ProposalSchema(BaseModel):
     confidence: str
     shift: Optional[int]
     label: Optional[str]
+    new_qualname: Optional[str] = None  # For semantic subscriptions when construct renamed
+    new_kind: Optional[str] = None  # For semantic subscriptions if kind changed
 
 
 class ScanResultSchema(BaseModel):

@@ -1,12 +1,22 @@
 # codesub
 
-Subscribe to file line ranges and detect changes via git diff.
+Subscribe to code sections and track changes via git diff.
 
 ## What is codesub?
 
-codesub is a code monitoring tool that lets you track specific sections of code across your codebase. Instead of watching entire files, you "subscribe" to precise line ranges that matter to you—critical functions, security-sensitive code, configuration blocks, or API contracts.
+codesub is a code monitoring tool that lets you track specific sections of code across your codebase. You can subscribe to:
 
-When code changes, codesub detects which subscriptions are affected and automatically adjusts line numbers when surrounding code shifts. This makes it useful for:
+- **Line ranges**: Track precise line ranges (e.g., `config.py:10-25`)
+- **Semantic targets**: Track code constructs by identity (e.g., `auth.py::User.validate`)
+
+Semantic subscriptions use Tree-sitter parsing to track functions, classes, methods, and variables by their qualified name—so they survive refactoring, line shifts, and even renames.
+
+When code changes, codesub detects which subscriptions are affected and classifies changes as:
+- **Structural**: Interface changed (type annotations, method signatures)
+- **Content**: Implementation changed (function body, constant value)
+- **Missing**: Construct was deleted
+
+This makes it useful for:
 
 - **Code reviews**: Get notified when critical sections change in a PR
 - **Documentation**: Keep external docs in sync with code by tracking referenced line ranges
@@ -23,8 +33,13 @@ When code changes, codesub detects which subscriptions are affected and automati
 
 2. **Subscribe** to code sections you want to track:
    ```bash
+   # Line-based subscriptions
    codesub add src/auth.py:42-50 --label "Password validation"
    codesub add config.py:10-25 --label "Database settings"
+
+   # Semantic subscriptions (track by code construct identity)
+   codesub add src/auth.py::User.validate --label "User validation method"
+   codesub add config.py::API_VERSION --label "API version constant"
    ```
 
 3. **Scan** for changes against your baseline (default: last commit):
@@ -206,6 +221,36 @@ codesub add src/api.py:100 --label "Auth check"
 # With description
 codesub add config.py:10-20 --label "DB config" --desc "Database connection settings"
 ```
+
+### Semantic Subscriptions
+
+Track code constructs by identity instead of line numbers:
+
+```bash
+# Subscribe to a function/method
+codesub add src/auth.py::User.validate --label "User validation"
+
+# Subscribe to a class field
+codesub add models.py::User.email --label "User email field"
+
+# Subscribe to a constant
+codesub add config.py::API_VERSION --label "API version"
+
+# List available constructs in a file
+codesub symbols src/auth.py
+
+# Filter by kind
+codesub symbols src/auth.py --kind method
+
+# Search by name pattern
+codesub symbols src/auth.py --grep validate
+```
+
+Semantic subscriptions detect:
+- **Structural changes**: Type annotation or signature changes
+- **Content changes**: Value or body implementation changes
+- **Missing constructs**: When the construct is deleted
+- **Renames**: When the construct is renamed (proposes update)
 
 ### List Subscriptions
 
@@ -390,19 +435,28 @@ A mock repository is included for testing codesub without setting up your own pr
 
 | Task | Description |
 |------|-------------|
-| `task mock:init` | Initialize mock_repo (git + register + sample subscription) |
+| `task mock:init` | Initialize mock_repo with line-based and semantic subscriptions |
 | `task mock:reset` | Reset mock_repo to clean state |
 
 ```bash
-# Set up the mock repo
+# Set up the mock repo (creates 8 sample subscriptions)
 task mock:init
 
 # Start the UI and explore
 task dev
 
-# Make changes to mock_repo/config.py and scan
+# Make changes and scan
 task codesub:scan TARGET=mock_repo
 ```
+
+The mock repo includes semantic subscriptions for:
+- Module constants (`API_VERSION`)
+- Enum members (`Status.PENDING`)
+- TypedDict fields (`UserDict.email`)
+- Dataclass fields (`ComplexData.tags`)
+- Methods (`Calculator.add`)
+- Properties (`Rectangle.width`)
+- Class variables (`Cache.max_size`)
 
 ### Utility Tasks
 
@@ -423,16 +477,21 @@ codesub/
 ├── src/codesub/          # Main package
 │   ├── cli.py            # CLI interface
 │   ├── api.py            # FastAPI server (REST API)
-│   ├── models.py         # Data models (Subscription, Project, ScanHistoryEntry)
+│   ├── models.py         # Data models (Subscription, SemanticTarget, Project)
 │   ├── config_store.py   # Per-project config management (.codesub/)
 │   ├── project_store.py  # Multi-project registration
 │   ├── scan_history.py   # Scan history storage
 │   ├── git_repo.py       # Git wrapper
 │   ├── diff_parser.py    # Unified diff parsing
-│   ├── detector.py       # Trigger detection
+│   ├── detector.py       # Trigger detection (line-based and semantic)
 │   ├── update_doc.py     # Update document generation
 │   ├── updater.py        # Apply proposals
-│   └── errors.py         # Custom exceptions
+│   ├── utils.py          # Target parsing utilities
+│   ├── errors.py         # Custom exceptions
+│   └── semantic/         # Semantic code analysis
+│       ├── __init__.py
+│       ├── fingerprint.py   # Hash computation for constructs
+│       └── python_indexer.py # Python AST parsing via Tree-sitter
 ├── frontend/             # React + TypeScript frontend
 │   └── src/
 │       ├── App.tsx       # Main app with multi-project support

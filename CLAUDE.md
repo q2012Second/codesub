@@ -1,6 +1,10 @@
 # codesub - Code Subscription Tool
 
-A Python CLI tool that lets you "subscribe" to file line ranges, detect changes via git diff, and keep subscriptions valid across line shifts and file renames.
+A Python CLI tool that lets you "subscribe" to code sections, detect changes via git diff, and keep subscriptions valid across line shifts and file renames.
+
+Supports two subscription types:
+- **Line-based**: Track line ranges (e.g., `config.py:10-25`)
+- **Semantic**: Track code constructs by identity (e.g., `auth.py::User.validate`)
 
 ## Development
 
@@ -31,7 +35,7 @@ task mock:init
 | `task test` | Run all tests |
 | `task lint` | Run linters (ruff + mypy) |
 | `task format` | Auto-format code |
-| `task mock:init` | Initialize mock_repo (git + register + sample subscription) |
+| `task mock:init` | Initialize mock_repo with line-based + semantic subscriptions |
 | `task mock:reset` | Reset mock_repo to clean state |
 | `task codesub:scan TARGET=path` | Scan a project for changes |
 | `task codesub:list TARGET=path` | List subscriptions |
@@ -42,20 +46,25 @@ task mock:init
 src/codesub/
 ├── cli.py            # CLI interface (argparse)
 ├── api.py            # FastAPI REST API server
-├── models.py         # Data models (Subscription, Anchor, Config, Project, ScanHistoryEntry)
+├── models.py         # Data models (Subscription, SemanticTarget, Anchor, Config, Project)
 ├── config_store.py   # Per-project JSON config management (.codesub/)
 ├── project_store.py  # Multi-project registration (data/projects.json)
 ├── scan_history.py   # Scan history storage (data/scan_history/)
 ├── git_repo.py       # Git wrapper
 ├── diff_parser.py    # Unified diff parsing
-├── detector.py       # Trigger detection and line shift calculation
+├── detector.py       # Trigger detection (line-based and semantic)
 ├── update_doc.py     # Update document generation
 ├── updater.py        # Apply proposals to subscriptions
-└── errors.py         # Custom exceptions
+├── utils.py          # Target parsing (LineTarget, SemanticTargetSpec)
+├── errors.py         # Custom exceptions
+└── semantic/         # Semantic code analysis (Tree-sitter based)
+    ├── __init__.py
+    ├── fingerprint.py    # Hash computation (interface_hash, body_hash)
+    └── python_indexer.py # Python construct extraction
 
 frontend/             # React + TypeScript frontend
 mock_repo/            # Mock repository for testing (run `task mock:init`)
-tests/                # Test suite (pytest)
+tests/                # Test suite (pytest, 180+ tests)
 data/                 # Local server data (gitignored)
 ├── projects.json     # Registered projects
 └── scan_history/     # Scan results per project
@@ -69,6 +78,14 @@ codesub init
 
 # Subscribe to a line range
 codesub add path/to/file.py:42-50 --label "Important function"
+
+# Subscribe to a semantic target (code construct)
+codesub add path/to/file.py::ClassName.method --label "Track method"
+codesub add config.py::API_VERSION --label "Track constant"
+
+# List discoverable constructs in a file
+codesub symbols path/to/file.py
+codesub symbols path/to/file.py --kind method --grep validate
 
 # List subscriptions
 codesub list
@@ -87,6 +104,26 @@ codesub projects remove <project_id>
 # Scan history management
 codesub scan-history clear [--project PROJECT_ID]
 ```
+
+## Semantic Subscriptions
+
+Semantic subscriptions track code constructs by identity using Tree-sitter parsing.
+
+**Target format**: `path/to/file.py::QualifiedName` or `path/to/file.py::kind:QualifiedName`
+
+**Supported constructs** (Python):
+- Module variables/constants: `config.py::API_VERSION`
+- Class fields: `models.py::User.email`
+- Methods: `auth.py::User.validate`
+- Enum members: `types.py::Status.PENDING`
+- Dataclass fields: `models.py::Config.timeout`
+
+**Change detection**:
+- `structural`: Type annotation or signature changed
+- `content`: Value or body changed
+- `missing`: Construct deleted
+
+**Fingerprinting**: Uses `interface_hash` (type/signature) and `body_hash` (value/body) for change classification.
 
 ## API Endpoints
 

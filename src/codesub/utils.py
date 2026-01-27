@@ -1,9 +1,66 @@
 """Utility functions for codesub."""
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import InvalidLocationError, InvalidLineRangeError
+
+
+@dataclass(frozen=True)
+class LineTarget:
+    """Line-based subscription target."""
+
+    path: str
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
+class SemanticTargetSpec:
+    """Semantic subscription target specification."""
+
+    path: str
+    qualname: str
+    kind: str | None = None  # Optional kind for disambiguation
+
+
+def parse_target_spec(spec: str) -> LineTarget | SemanticTargetSpec:
+    """
+    Parse target specification.
+
+    Formats:
+    - "path/to/file.py:42-50" -> LineTarget
+    - "path/to/file.py::QualName" -> SemanticTargetSpec
+    - "path/to/file.py::kind:QualName" -> SemanticTargetSpec with kind
+
+    Raises:
+        InvalidLocationError: If the location format is invalid.
+    """
+    if "::" in spec:
+        path, rest = spec.split("::", 1)
+        if not path or not rest:
+            raise InvalidLocationError(spec, "expected 'path.py::QualName'")
+
+        # Normalize path
+        path = Path(path).as_posix()
+
+        # Check for kind prefix: "field:User.role"
+        # Valid kinds are: variable, field, method
+        # Note: "const" is a role, not a kind - constants are kind="variable" with role="const"
+        kind = None
+        qualname = rest
+        if ":" in rest and not rest.startswith(":"):
+            maybe_kind, maybe_qualname = rest.split(":", 1)
+            if maybe_kind in ("variable", "field", "method"):
+                kind = maybe_kind
+                qualname = maybe_qualname
+
+        return SemanticTargetSpec(path=path, qualname=qualname, kind=kind)
+
+    # Fall back to line-based parsing
+    path, start, end = parse_location(spec)
+    return LineTarget(path=path, start_line=start, end_line=end)
 
 
 def parse_location(location: str) -> tuple[str, int, int]:

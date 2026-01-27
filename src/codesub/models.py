@@ -17,6 +17,42 @@ def _generate_id() -> str:
 
 
 @dataclass
+class SemanticTarget:
+    """Semantic identifier for a code construct."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save"
+    role: str | None = None  # "const" for constants, else None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "language": self.language,
+            "kind": self.kind,
+            "qualname": self.qualname,
+            "role": self.role,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+            "fingerprint_version": self.fingerprint_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+        return cls(
+            language=data["language"],
+            kind=data["kind"],
+            qualname=data["qualname"],
+            role=data.get("role"),
+            interface_hash=data.get("interface_hash", ""),
+            body_hash=data.get("body_hash", ""),
+            fingerprint_version=data.get("fingerprint_version", 1),
+        )
+
+
+@dataclass
 class Anchor:
     """Context lines around a subscription for display and future fuzzy matching."""
 
@@ -51,6 +87,7 @@ class Subscription:
     label: str | None = None
     description: str | None = None
     anchors: Anchor | None = None
+    semantic: SemanticTarget | None = None
     active: bool = True
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
@@ -71,6 +108,8 @@ class Subscription:
             result["description"] = self.description
         if self.anchors is not None:
             result["anchors"] = self.anchors.to_dict()
+        if self.semantic is not None:
+            result["semantic"] = self.semantic.to_dict()
         return result
 
     @classmethod
@@ -78,6 +117,9 @@ class Subscription:
         anchors = None
         if "anchors" in data:
             anchors = Anchor.from_dict(data["anchors"])
+        semantic = None
+        if "semantic" in data:
+            semantic = SemanticTarget.from_dict(data["semantic"])
         return cls(
             id=data["id"],
             path=data["path"],
@@ -86,6 +128,7 @@ class Subscription:
             label=data.get("label"),
             description=data.get("description"),
             anchors=anchors,
+            semantic=semantic,
             active=data.get("active", True),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
@@ -100,6 +143,7 @@ class Subscription:
         label: str | None = None,
         description: str | None = None,
         anchors: Anchor | None = None,
+        semantic: "SemanticTarget | None" = None,
     ) -> "Subscription":
         """Create a new subscription with generated ID and timestamps."""
         now = _utc_now()
@@ -111,6 +155,7 @@ class Subscription:
             label=label,
             description=description,
             anchors=anchors,
+            semantic=semantic,
             active=True,
             created_at=now,
             updated_at=now,
@@ -213,6 +258,8 @@ class Trigger:
     end_line: int
     reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range"]
     matching_hunks: list[Hunk]
+    change_type: str | None = None  # "STRUCTURAL"|"CONTENT"|"MISSING"|"AMBIGUOUS"|"PARSE_ERROR"
+    details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -227,9 +274,11 @@ class Proposal:
     new_path: str
     new_start: int
     new_end: int
-    reasons: list[str]  # ["rename", "line_shift"]
+    reasons: list[str]  # ["rename", "line_shift", "semantic_location"]
     confidence: str = "high"  # "high" for POC (math-based)
     shift: int | None = None
+    new_qualname: str | None = None  # For semantic subscriptions when construct renamed
+    new_kind: str | None = None  # For semantic subscriptions if kind changed
 
 
 @dataclass

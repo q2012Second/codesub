@@ -9,8 +9,14 @@ from . import __version__
 from .config_store import ConfigStore
 from .errors import CodesubError
 from .git_repo import GitRepo
-from .models import Anchor, Subscription
-from .utils import extract_anchors, format_subscription, parse_location
+from .models import Anchor, SemanticTarget, Subscription
+from .utils import (
+    LineTarget,
+    SemanticTargetSpec,
+    extract_anchors,
+    format_subscription,
+    parse_target_spec,
+)
 from .project_store import ProjectStore
 from .scan_history import ScanHistory
 
@@ -48,56 +54,144 @@ def cmd_add(args: argparse.Namespace) -> int:
     try:
         store, repo = get_store_and_repo()
         config = store.load()
-
-        # Parse location
-        path, start_line, end_line = parse_location(args.location)
-
-        # Validate file exists at baseline
         baseline = config.repo.baseline_ref
-        lines = repo.show_file(baseline, path)
 
-        # Validate line range
-        if end_line > len(lines):
-            print(
-                f"Error: Line range {start_line}-{end_line} exceeds file length ({len(lines)} lines)",
-                file=sys.stderr,
+        # Parse target specification
+        target = parse_target_spec(args.location)
+
+        if isinstance(target, SemanticTargetSpec):
+            # Semantic subscription
+            return _add_semantic_subscription(
+                store, repo, baseline, target, args
             )
-            return 1
-
-        # Extract anchors
-        context_before, watched_lines, context_after = extract_anchors(
-            lines, start_line, end_line, context=args.context
-        )
-        anchors = Anchor(
-            context_before=context_before,
-            lines=watched_lines,
-            context_after=context_after,
-        )
-
-        # Create subscription
-        sub = Subscription.create(
-            path=path,
-            start_line=start_line,
-            end_line=end_line,
-            label=args.label,
-            description=args.desc,
-            anchors=anchors,
-        )
-
-        store.add_subscription(sub)
-
-        location = f"{path}:{start_line}" if start_line == end_line else f"{path}:{start_line}-{end_line}"
-        print(f"Added subscription: {sub.id[:8]}")
-        print(f"  Location: {location}")
-        if args.label:
-            print(f"  Label: {args.label}")
-        print(f"  Watching {end_line - start_line + 1} line(s)")
-
-        return 0
+        else:
+            # Line-based subscription
+            return _add_line_subscription(
+                store, repo, baseline, target, args
+            )
 
     except CodesubError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+
+
+def _add_line_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: LineTarget,
+    args: argparse.Namespace,
+) -> int:
+    """Add a line-based subscription."""
+    lines = repo.show_file(baseline, target.path)
+
+    # Validate line range
+    if target.end_line > len(lines):
+        print(
+            f"Error: Line range {target.start_line}-{target.end_line} exceeds "
+            f"file length ({len(lines)} lines)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, target.start_line, target.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=target.path,
+        start_line=target.start_line,
+        end_line=target.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+
+    location = (
+        f"{target.path}:{target.start_line}"
+        if target.start_line == target.end_line
+        else f"{target.path}:{target.start_line}-{target.end_line}"
+    )
+    print(f"Added subscription: {sub.id[:8]}")
+    print(f"  Location: {location}")
+    if args.label:
+        print(f"  Label: {args.label}")
+    print(f"  Watching {target.end_line - target.start_line + 1} line(s)")
+
+    return 0
+
+
+def _add_semantic_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: SemanticTargetSpec,
+    args: argparse.Namespace,
+) -> int:
+    """Add a semantic subscription."""
+    from .semantic import PythonIndexer
+
+    indexer = PythonIndexer()
+
+    lines = repo.show_file(baseline, target.path)
+    source = "\n".join(lines)
+
+    construct = indexer.find_construct(
+        source, target.path, target.qualname, target.kind
+    )
+    if construct is None:
+        print(f"Error: Construct '{target.qualname}' not found in {target.path}")
+        print("Use 'codesub symbols' to discover valid targets.")
+        return 1
+
+    # Extract anchors from construct lines
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, construct.start_line, construct.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create semantic target
+    semantic = SemanticTarget(
+        language="python",
+        kind=construct.kind,
+        qualname=construct.qualname,
+        role=construct.role,
+        interface_hash=construct.interface_hash,
+        body_hash=construct.body_hash,
+    )
+
+    sub = Subscription.create(
+        path=target.path,
+        start_line=construct.start_line,
+        end_line=construct.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+        semantic=semantic,
+    )
+
+    store.add_subscription(sub)
+
+    print(f"Added semantic subscription: {sub.id[:8]}")
+    print(f"  Target: {construct.kind} {construct.qualname}")
+    print(f"  Location: {target.path}:{construct.start_line}-{construct.end_line}")
+    if args.label:
+        print(f"  Label: {args.label}")
+
+    return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
@@ -366,6 +460,69 @@ def cmd_scan_history_clear(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_symbols(args: argparse.Namespace) -> int:
+    """List discoverable code constructs in a file."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        ref = args.ref or config.repo.baseline_ref
+        lines = repo.show_file(ref, args.path)
+        source = "\n".join(lines)
+
+        from .semantic import PythonIndexer
+
+        indexer = PythonIndexer()
+        constructs = indexer.index_file(source, args.path)
+
+        # Filter by kind if specified
+        if args.kind:
+            constructs = [c for c in constructs if c.kind == args.kind]
+
+        # Filter by grep pattern if specified
+        if args.grep:
+            constructs = [c for c in constructs if args.grep in c.qualname]
+
+        if args.json:
+            data = [
+                {
+                    "path": c.path,
+                    "kind": c.kind,
+                    "qualname": c.qualname,
+                    "start_line": c.start_line,
+                    "end_line": c.end_line,
+                    "role": c.role,
+                }
+                for c in constructs
+            ]
+            print(json.dumps(data, indent=2))
+        else:
+            if not constructs:
+                print(f"No constructs found in {args.path}")
+                return 0
+
+            print(f"Constructs in {args.path} ({len(constructs)}):")
+            print()
+            for c in constructs:
+                fqn = f"{c.path}::{c.qualname}"
+                role_str = f" ({c.role})" if c.role else ""
+                lines_str = (
+                    f"{c.start_line}"
+                    if c.start_line == c.end_line
+                    else f"{c.start_line}-{c.end_line}"
+                )
+                print(f"  {c.kind:<10} {c.qualname}{role_str}")
+                print(f"             Lines: {lines_str}")
+                print(f"             FQN:   {fqn}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the API server."""
     try:
@@ -428,7 +585,9 @@ def create_parser() -> argparse.ArgumentParser:
     # add
     add_parser = subparsers.add_parser("add", help="Add a new subscription")
     add_parser.add_argument(
-        "location", help="Location to subscribe to (path:line or path:start-end)"
+        "location",
+        help="Location to subscribe to. Line-based: 'path:line' or 'path:start-end'. "
+        "Semantic: 'path::QualName' or 'path::kind:QualName'",
     )
     add_parser.add_argument("--label", "-l", help="Label for the subscription")
     add_parser.add_argument("--desc", "-d", help="Description")
@@ -455,6 +614,20 @@ def create_parser() -> argparse.ArgumentParser:
     remove_parser.add_argument(
         "--hard", action="store_true", help="Delete entirely (default: deactivate)"
     )
+
+    # symbols
+    symbols_parser = subparsers.add_parser(
+        "symbols", help="List discoverable code constructs in a file"
+    )
+    symbols_parser.add_argument("path", help="File path to analyze")
+    symbols_parser.add_argument("--ref", help="Git ref (default: baseline)")
+    symbols_parser.add_argument(
+        "--kind",
+        choices=["variable", "field", "method"],
+        help="Filter by construct kind",
+    )
+    symbols_parser.add_argument("--grep", help="Filter by name pattern")
+    symbols_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     # scan
     scan_parser = subparsers.add_parser(
@@ -565,6 +738,7 @@ def main() -> int:
         "add": cmd_add,
         "list": cmd_list,
         "remove": cmd_remove,
+        "symbols": cmd_symbols,
         "scan": cmd_scan,
         "apply-updates": cmd_apply_updates,
         "serve": cmd_serve,

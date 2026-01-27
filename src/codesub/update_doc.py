@@ -30,7 +30,7 @@ def result_to_dict(result: ScanResult) -> dict[str, Any]:
 
 def _trigger_to_dict(trigger: Trigger) -> dict[str, Any]:
     """Convert a Trigger to a dictionary."""
-    return {
+    result = {
         "subscription_id": trigger.subscription_id,
         "path": trigger.path,
         "start_line": trigger.start_line,
@@ -47,11 +47,17 @@ def _trigger_to_dict(trigger: Trigger) -> dict[str, Any]:
             for h in trigger.matching_hunks
         ],
     }
+    # Add semantic-specific fields if present
+    if trigger.change_type is not None:
+        result["change_type"] = trigger.change_type
+    if trigger.details is not None:
+        result["details"] = trigger.details
+    return result
 
 
 def _proposal_to_dict(proposal: Proposal) -> dict[str, Any]:
     """Convert a Proposal to a dictionary."""
-    return {
+    result = {
         "subscription_id": proposal.subscription_id,
         "old_path": proposal.old_path,
         "old_start": proposal.old_start,
@@ -64,6 +70,12 @@ def _proposal_to_dict(proposal: Proposal) -> dict[str, Any]:
         "shift": proposal.shift,
         "label": proposal.subscription.label,
     }
+    # Add semantic-specific fields if present
+    if proposal.new_qualname is not None:
+        result["new_qualname"] = proposal.new_qualname
+    if proposal.new_kind is not None:
+        result["new_kind"] = proposal.new_kind
+    return result
 
 
 def write_update_doc(result: ScanResult, path: str | Path) -> None:
