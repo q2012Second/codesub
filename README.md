@@ -6,6 +6,32 @@ Subscribe to code sections and get notified when they change.
 
 codesub is a code monitoring tool that lets you track specific sections of code across your codebase. When tracked code changes, codesub detects it and tells you exactly what changed and why.
 
+## Quick Start
+
+```bash
+# Install
+poetry install
+
+# Initialize in your project
+cd your-project
+codesub init
+
+# Subscribe to code constructs
+codesub add "auth.py::User.validate" --label "User validation"
+codesub add "config.py::API_VERSION" --label "API version"
+codesub add "pricing.py:45-60" --label "Tax calculation"
+
+# List subscriptions
+codesub list
+
+# Scan for changes (compares baseline to HEAD)
+codesub scan
+
+# Discover what you can track in a file
+codesub symbols auth.py
+codesub symbols models.py --kind method
+```
+
 ## Subscription Types
 
 ### Line-Based Subscriptions
@@ -142,29 +168,65 @@ The web UI provides a visual way to manage everything:
 
 ## Use Cases
 
-### Code Review Automation
+### External API Contracts
 
-Track critical code paths and get notified in PRs when they change. Integrates with CI to flag changes that need extra review attention.
+Track response schemas from external services (Stripe, Twilio, etc.). When you update your local models to match their API changes, codesub detects it:
 
-### Documentation Sync
+```python
+# schemas/external.py - Track fields you depend on
+@dataclass
+class StripePaymentIntent:
+    id: str
+    amount: int
+    status: str  # <-- codesub add "schemas/external.py::StripePaymentIntent.status"
+```
 
-When documentation references specific line numbers or code sections, subscribe to those sections. You'll know immediately when the code changes and docs need updating.
+### Public API Schemas
+
+Track your own API response structures. Changes here break client integrations:
+
+```python
+# schemas/api.py - Breaking change detection
+@dataclass
+class OrderResponse:
+    order_id: str
+    status: str      # <-- Track: clients parse this
+    total: Decimal   # <-- Track: displayed to users
+```
+
+### Business Logic
+
+Track revenue-critical calculations and validation rules:
+
+```python
+# services/order.py
+def calculate_pricing(self, items, user) -> PricingBreakdown:
+    # Tax calculation, shipping logic, discounts
+    # Changes here affect revenue - track the whole method
+```
+
+```bash
+codesub add "services/order.py::OrderService.calculate_pricing" --label "Pricing calculation"
+```
+
+### Configuration
+
+Track settings that affect behavior:
+
+```python
+# config.py
+API_VERSION = "v2"           # Breaking change for clients
+FREE_SHIPPING_THRESHOLD = 75  # Affects pricing
+TAX_RATES = {"US-CA": 0.0725} # Affects tax calculation
+```
 
 ### Security Monitoring
 
 Subscribe to authentication logic, authorization checks, cryptographic operations, and other security-sensitive code. Any modification triggers a review.
 
-### Onboarding
+### Documentation Sync
 
-Create subscriptions for the most important parts of your codebase with descriptive labels. New team members can quickly find and understand critical code.
-
-### API Stability
-
-Track public interfaces, exported functions, and API contracts. Structural changes to these subscriptions indicate breaking changes that need versioning attention.
-
-### Refactoring Safety
-
-Before a large refactoring, subscribe to key behaviors and outputs. Scan after refactoring to verify the important parts still exist and have the expected signatures.
+When documentation references specific line numbers or code sections, subscribe to those sections. You'll know immediately when the code changes and docs need updating.
 
 ## Symbol Discovery
 
@@ -174,6 +236,36 @@ Not sure what to subscribe to? Use symbol discovery to explore available constru
 - Filter by construct kind (function, method, class, etc.)
 - Search by name pattern
 - See the qualified name to use for subscriptions
+
+## Try It Out
+
+The `mock_repo/` directory contains a sample e-commerce API you can experiment with:
+
+```bash
+# Set up the mock repository
+task mock:init
+
+# View the created subscriptions
+cd mock_repo && codesub list
+```
+
+This creates 11 subscriptions tracking:
+- **External API schemas** - Stripe payment status, webhook event types
+- **Public API schemas** - Pricing breakdown, order response fields
+- **Business logic** - Pricing calculation, order validation methods
+- **Configuration** - API version, shipping threshold, tax rates
+
+Try making changes and scanning:
+
+```bash
+# Make a change (e.g., edit FREE_SHIPPING_THRESHOLD in config.py)
+# Then scan
+codesub scan
+
+# Output shows: CONTENT change detected in "Free shipping threshold"
+```
+
+See `mock_repo/README.md` for detailed examples of each change type.
 
 ## License
 
