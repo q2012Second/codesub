@@ -27,18 +27,50 @@ task mock:init
 
 ## Task Commands
 
+### Development
 | Task | Description |
 |------|-------------|
 | `task dev` | Start backend + frontend servers |
 | `task dev:backend` | Start FastAPI backend only |
 | `task dev:frontend` | Start Vite frontend only |
+| `task stop` | Stop running servers |
+| `task shell` | IPython shell with codesub modules preloaded |
+
+### Testing & Quality
+| Task | Description |
+|------|-------------|
 | `task test` | Run all tests |
+| `task test -- -k "name"` | Run specific tests |
+| `task test:cov` | Run with coverage report |
+| `task test:unit` | Unit tests only |
+| `task test:integration` | Integration tests only |
 | `task lint` | Run linters (ruff + mypy) |
 | `task format` | Auto-format code |
-| `task mock:init` | Initialize mock_repo with line-based + semantic subscriptions |
+| `task format:check` | Check formatting (CI-friendly) |
+
+### Mock Repository
+| Task | Description |
+|------|-------------|
+| `task mock:init` | Initialize mock_repo with sample subscriptions |
 | `task mock:reset` | Reset mock_repo to clean state |
-| `task codesub:scan TARGET=path` | Scan a project for changes |
+
+### Codesub Operations
+| Task | Description |
+|------|-------------|
+| `task codesub:init TARGET=path` | Initialize codesub in target project |
+| `task codesub:add TARGET=path -- file:10-20` | Add subscription |
 | `task codesub:list TARGET=path` | List subscriptions |
+| `task codesub:scan TARGET=path` | Scan for changes |
+| `task codesub:scan:ci TARGET=path` | Scan with CI exit codes |
+| `task codesub:apply TARGET=path` | Apply update proposals |
+
+### Build & CI
+| Task | Description |
+|------|-------------|
+| `task setup` | Install all dependencies |
+| `task build` | Build backend + frontend |
+| `task ci` | Run CI checks (lint + test) |
+| `task clean` | Clean build artifacts |
 
 ## Project Structure
 

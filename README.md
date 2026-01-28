@@ -1,526 +1,179 @@
 # codesub
 
-Subscribe to code sections and track changes via git diff.
+Subscribe to code sections and get notified when they change.
 
 ## What is codesub?
 
-codesub is a code monitoring tool that lets you track specific sections of code across your codebase. You can subscribe to:
+codesub is a code monitoring tool that lets you track specific sections of code across your codebase. When tracked code changes, codesub detects it and tells you exactly what changed and why.
 
-- **Line ranges**: Track precise line ranges (e.g., `config.py:10-25`)
-- **Semantic targets**: Track code constructs by identity (e.g., `auth.py::User.validate`)
+## Subscription Types
 
-Semantic subscriptions use Tree-sitter parsing to track functions, classes, methods, and variables by their qualified name—so they survive refactoring, line shifts, and even renames.
+### Line-Based Subscriptions
 
-When code changes, codesub detects which subscriptions are affected and classifies changes as:
-- **Structural**: Interface changed (type annotations, method signatures)
-- **Content**: Implementation changed (function body, constant value)
-- **Missing**: Construct was deleted
+Track specific line ranges in files. Useful for monitoring configuration blocks, critical code sections, or any code you reference in external documentation.
 
-This makes it useful for:
+**Example targets:**
+- `config.py:10-25` — Track lines 10 through 25
+- `src/api.py:100` — Track a single line
 
-- **Code reviews**: Get notified when critical sections change in a PR
-- **Documentation**: Keep external docs in sync with code by tracking referenced line ranges
-- **Security audits**: Monitor sensitive code paths for unexpected modifications
-- **Onboarding**: Highlight important code sections for new team members
-- **CI/CD gates**: Fail builds when protected code changes without review
-
-## How to Use
-
-1. **Initialize** codesub in any git repository:
-   ```bash
-   codesub init
-   ```
-
-2. **Subscribe** to code sections you want to track:
-   ```bash
-   # Line-based subscriptions
-   codesub add src/auth.py:42-50 --label "Password validation"
-   codesub add config.py:10-25 --label "Database settings"
-
-   # Semantic subscriptions (track by code construct identity)
-   codesub add src/auth.py::User.validate --label "User validation method"
-   codesub add config.py::API_VERSION --label "API version constant"
-   ```
-
-3. **Scan** for changes against your baseline (default: last commit):
-   ```bash
-   codesub scan
-   ```
-
-4. **Review** triggered subscriptions and apply line-shift updates:
-   ```bash
-   codesub scan --write-updates updates.json
-   codesub apply-updates updates.json
-   ```
-
-You can also use the web UI (`task dev`) to visually manage subscriptions across multiple projects, run scans, and review history.
-
-## Prerequisites
-
-- Python 3.10+
-- [Poetry](https://python-poetry.org/) for dependency management
-- [Task](https://taskfile.dev/) (optional, but recommended)
-- Node.js 18+ (for frontend)
-
-### Installing Task
-
-```bash
-# macOS
-brew install go-task
-
-# Linux
-sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
-
-# Or see https://taskfile.dev/installation/
-```
-
-## Quick Start
-
-```bash
-# Start development servers (installs deps automatically)
-task dev
-
-# Initialize the included mock repository for testing
-task mock:init
-
-# Or without Task:
-poetry install
-poetry run codesub serve
-```
-
-## Development with Task
-
-List all available tasks:
-
-```bash
-task help
-```
-
-### Setup & Installation
-
-| Task | Description |
-|------|-------------|
-| `task setup` | Install all dependencies (backend + frontend) |
-| `task setup:backend` | Install Python dependencies via Poetry |
-| `task setup:frontend` | Install frontend dependencies via npm |
-
-### Development Servers
-
-| Task | Description |
-|------|-------------|
-| `task dev` | Start both backend and frontend servers |
-| `task dev:backend` | Start FastAPI backend only (with auto-reload) |
-| `task dev:frontend` | Start Vite frontend only |
-| `task stop` | Stop running backend and frontend servers |
-
-The backend API runs at `http://127.0.0.1:8000` with docs at `/docs`.
-The frontend runs at `http://localhost:5173`.
-
-## Frontend Usage
-
-The web UI provides a visual interface for managing subscriptions across multiple projects.
-
-### Getting Started
-
-```bash
-# Start both servers
-task dev
-
-# Set up the mock repository for testing
-task mock:init
-
-# Open http://localhost:5173 in your browser
-```
-
-### Managing Projects
-
-1. **Add a project**: Click "Add Project" and enter the path to a git repository with codesub initialized
-2. **Switch projects**: Use the project selector dropdown in the header
-3. **Remove a project**: Click the trash icon next to the project name
-
-### Managing Subscriptions
-
-1. **View subscriptions**: The main panel shows all subscriptions for the selected project
-2. **Add subscription**: Click "Add Subscription", enter file path and line range (e.g., `src/api.py:10-25`)
-3. **Filter by status**: Use the status filter to show active, inactive, or all subscriptions
-4. **View details**: Click on a subscription to see its full details, anchors, and code preview
-5. **Deactivate/Reactivate**: Use the toggle in the subscription detail view
-
-### Running Scans
-
-1. **Run a scan**: Click the "Scan" button to compare baseline against HEAD
-2. **View results**: Triggered subscriptions are highlighted with their trigger reasons
-3. **Apply updates**: If line shifts are detected, review and apply proposed updates
-
-### Scan History
-
-1. **View history**: Click "History" to see past scan results for the project
-2. **Review past scans**: Click on a scan entry to see its details
-3. **Clear history**: Use the clear button to remove old scan results
-
-### Interactive Shell
-
-```bash
-# IPython shell with codesub modules preloaded
-task shell
-
-# Basic Python shell (fallback)
-task shell:simple
-```
-
-Available in shell: `ConfigStore`, `GitRepo`, `Detector`, `Subscription`
-
-### Testing
-
-| Task | Description |
-|------|-------------|
-| `task test` | Run all tests |
-| `task test -- -k "test_name"` | Run specific tests |
-| `task test:cov` | Run with coverage report |
-| `task test:watch` | Watch mode (requires pytest-watch) |
-| `task test:unit` | Unit tests only |
-| `task test:integration` | Integration tests only |
-
-### Linting & Formatting
-
-| Task | Description |
-|------|-------------|
-| `task lint` | Run all linters (ruff + mypy) |
-| `task format` | Auto-format code |
-| `task format:check` | Check formatting (CI-friendly) |
-
-### Build
-
-| Task | Description |
-|------|-------------|
-| `task build` | Build both backend and frontend |
-| `task build:backend` | Build Python package |
-| `task build:frontend` | Build frontend for production |
-
-## CLI Usage
-
-### Initialize codesub
-
-```bash
-# In a git repository
-codesub init
-
-# With specific baseline
-codesub init --baseline main
-```
-
-### Add Subscriptions
-
-```bash
-# Subscribe to a line range
-codesub add path/to/file.py:42-50 --label "Important function"
-
-# Subscribe to a single line
-codesub add src/api.py:100 --label "Auth check"
-
-# With description
-codesub add config.py:10-20 --label "DB config" --desc "Database connection settings"
-```
+When lines around your subscription shift (due to code added/removed elsewhere in the file), codesub automatically proposes updated line numbers to keep your subscription accurate.
 
 ### Semantic Subscriptions
 
-Track code constructs by identity instead of line numbers:
+Track code constructs by their identity, not their location. Semantic subscriptions follow functions, classes, methods, and variables even as they move around the file or get refactored.
 
-```bash
-# Subscribe to a function/method
-codesub add src/auth.py::User.validate --label "User validation"
+**Example targets:**
+- `auth.py::User.validate` — Track a method
+- `config.py::API_VERSION` — Track a constant
+- `models.py::User.email` — Track a class field
+- `types.py::Status.PENDING` — Track an enum member
 
-# Subscribe to a class field
-codesub add models.py::User.email --label "User email field"
+**Supported constructs (Python):**
+- Functions and methods
+- Classes
+- Module-level variables and constants
+- Class fields and properties
+- Enum members
+- Dataclass fields
+- TypedDict fields
 
-# Subscribe to a constant
-codesub add config.py::API_VERSION --label "API version"
+Semantic subscriptions survive refactoring—if a function moves to a different line, gets reformatted, or has code added around it, the subscription stays attached to the right construct.
 
-# List available constructs in a file
-codesub symbols src/auth.py
+## Change Detection
 
-# Filter by kind
-codesub symbols src/auth.py --kind method
+When you scan for changes, codesub compares your baseline (usually the last commit or a branch like `main`) against the current state and identifies which subscriptions were affected.
 
-# Search by name pattern
-codesub symbols src/auth.py --grep validate
-```
+### Change Classifications
 
-Semantic subscriptions detect:
-- **Structural changes**: Type annotation or signature changes
-- **Content changes**: Value or body implementation changes
-- **Missing constructs**: When the construct is deleted
-- **Renames**: When the construct is renamed (proposes update)
+**For line-based subscriptions:**
+- **Triggered**: Lines within the subscribed range were modified
+- **Line shift**: Code above the subscription changed, shifting line numbers (auto-update available)
 
-### List Subscriptions
+**For semantic subscriptions:**
+- **Structural change**: The interface changed—type annotations, method signatures, function parameters
+- **Content change**: The implementation changed—function body, constant value, field default
+- **Missing**: The construct was deleted from the codebase
+- **Renamed**: The construct was renamed (update proposal available)
 
-```bash
-codesub list              # Active subscriptions
-codesub list --all        # Include inactive
-codesub list --verbose    # Show anchors and details
-codesub list --json       # JSON output
-```
+## Viewing Subscriptions
 
-### Scan for Changes
+### List View
 
-```bash
-# Compare baseline to HEAD
-codesub scan
+See all your subscriptions at a glance:
+- Subscription ID and label
+- Target (file path and line range or qualified name)
+- Status (active/inactive)
+- Subscription type (line-based or semantic)
 
-# Compare specific refs
-codesub scan --base main --target feature-branch
+### Detail View
 
-# Output as JSON
-codesub scan --json
+Dive into a specific subscription to see:
+- Full target information
+- Current line range (with code preview)
+- Anchors (context lines that help track position)
+- For semantic subscriptions: construct kind, qualified name, fingerprints
+- Description and metadata
 
-# Write update proposals to file
-codesub scan --write-updates updates.json
+## Scanning for Changes
 
-# Fail if subscriptions triggered (for CI)
-codesub scan --fail-on-trigger
-```
+A scan compares two git refs and reports which subscriptions were triggered:
 
-### Apply Updates
+- **Default scan**: Compare configured baseline to HEAD
+- **Commit range**: Compare any two commits
+- **Merge request**: Compare a feature branch against its target
 
-```bash
-# Apply proposed updates
-codesub apply-updates updates.json
+### Scan Results
 
-# Preview changes (dry run)
-codesub apply-updates updates.json --dry-run
-```
+Each scan produces a report showing:
+- Total subscriptions checked
+- Number triggered
+- For each triggered subscription:
+  - What changed (lines modified, construct altered)
+  - Change classification (structural/content/missing)
+  - Proposed updates (if line shifts detected)
 
-### Remove Subscriptions
+### Update Proposals
 
-```bash
-# Deactivate (soft delete)
-codesub remove <subscription_id>
+When code changes cause line numbers to shift, codesub proposes updated subscription ranges. You can:
+- Review the proposals
+- Apply them automatically
+- Apply selectively (dry-run first)
 
-# Delete permanently
-codesub remove <subscription_id> --hard
-```
+## Multi-Project Support
 
-### API Server
+Manage subscriptions across multiple repositories from a single interface:
 
-```bash
-# Start the API server
-codesub serve
+- **Project registration**: Add any git repository with codesub initialized
+- **Project switching**: Quickly switch between projects
+- **Independent configs**: Each project maintains its own subscriptions and baseline
+- **Centralized scanning**: Run scans across projects from one place
 
-# Custom host/port
-codesub serve --host 0.0.0.0 --port 9000
+## Scan History
 
-# Development mode with auto-reload
-codesub serve --reload
-```
+Every scan is stored for later review:
 
-### Multi-Project Management
+- **Browse past scans**: See when scans ran and what was detected
+- **Compare over time**: Track how subscriptions have been affected across commits
+- **Audit trail**: Keep a record of what changed and when
 
-The frontend supports managing multiple projects. Use these commands to register projects:
+## Web Interface
 
-```bash
-# List registered projects
-codesub projects list
-codesub projects list --json
+The web UI provides a visual way to manage everything:
 
-# Add a project (must have codesub initialized)
-codesub projects add /path/to/repo
-codesub projects add /path/to/repo --name "My Project"
-
-# Remove a project (does not delete .codesub config)
-codesub projects remove <project_id>
-```
-
-### Scan History
+**Dashboard:**
+- Project selector
+- Subscription list with status indicators
+- Quick scan button
 
-Scan results are stored locally for review:
+**Subscription Management:**
+- Add/remove subscriptions
+- Filter by status (active, inactive, triggered)
+- Bulk operations
 
-```bash
-# Clear scan history for a specific project
-codesub scan-history clear --project <project_id>
-
-# Clear all scan history
-codesub scan-history clear
-```
-
-## Using codesub in Other Projects
+**Scan Interface:**
+- Run scans with custom base/target refs
+- View triggered subscriptions highlighted
+- Apply update proposals with one click
 
-You can use Task to manage codesub in target projects:
+**History Browser:**
+- Timeline of past scans
+- Detailed view of each scan result
+- Clear old history
 
-```bash
-# Initialize codesub in another project (two equivalent ways)
-task codesub:init -- /path/to/project
-task codesub:init TARGET=/path/to/project
+## Use Cases
 
-# With additional options
-task codesub:init -- /path/to/project --baseline main
-
-# Add a subscription
-task codesub:add TARGET=/path/to/project -- src/auth.py:50-75 --label "Auth logic"
-
-# Scan for changes
-task codesub:scan -- /path/to/project
-task codesub:scan TARGET=/path/to/project
+### Code Review Automation
 
-# Check last commit
-task codesub:scan:last-commit TARGET=/path/to/project
-
-# Check a merge request
-task codesub:scan:mr TARGET=/path/to/project BASE=main HEAD=feature
-
-# Quick check (exits 1 if triggered)
-task codesub:check TARGET=/path/to/project
-```
-
-### CI/CD Integration
-
-```bash
-# Fail pipeline if subscriptions triggered
-task codesub:scan:ci TARGET=/path/to/project
-
-# Or directly:
-codesub scan --fail-on-trigger
-```
-
-#### GitHub Actions Example
-
-```yaml
-- name: Check code subscriptions
-  run: |
-    task codesub:scan:mr \
-      TARGET=. \
-      BASE=${{ github.event.pull_request.base.sha }} \
-      HEAD=${{ github.event.pull_request.head.sha }}
-```
-
-#### GitLab CI Example
-
-```yaml
-check-subscriptions:
-  script:
-    - task codesub:scan:mr
-        TARGET=.
-        BASE=$CI_MERGE_REQUEST_TARGET_BRANCH_SHA
-        HEAD=$CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
-```
-
-## Task Reference
-
-### Codesub Operations
-
-All codesub tasks support `TARGET=/path` or `-- /path` to specify a target project.
-
-| Task | Description |
-|------|-------------|
-| `task codesub:init -- /path` | Initialize codesub in target project |
-| `task codesub:add -- file:10-20` | Add a new subscription |
-| `task codesub:list` | List subscriptions |
-| `task codesub:list:verbose` | List with details |
-| `task codesub:list:json` | List as JSON |
-| `task codesub:remove -- <id>` | Remove a subscription |
-| `task codesub:scan` | Scan for triggered subscriptions |
-| `task codesub:scan:last-commit` | Check against last commit |
-| `task codesub:scan:commits BASE=x HEAD=y` | Scan commit range |
-| `task codesub:scan:mr BASE=x HEAD=y` | Scan merge request changes |
-| `task codesub:scan:json` | Scan with JSON output |
-| `task codesub:scan:write` | Scan and write update document |
-| `task codesub:scan:ci` | Scan with CI exit codes |
-| `task codesub:apply` | Apply update proposals |
-| `task codesub:apply:dry` | Preview updates (dry run) |
-| `task codesub:status` | Show subscriptions + scan summary |
-| `task codesub:check` | Quick triggered check |
-
-### Mock Repository
-
-A mock repository is included for testing codesub without setting up your own project:
-
-| Task | Description |
-|------|-------------|
-| `task mock:init` | Initialize mock_repo with line-based and semantic subscriptions |
-| `task mock:reset` | Reset mock_repo to clean state |
-
-```bash
-# Set up the mock repo (creates 8 sample subscriptions)
-task mock:init
-
-# Start the UI and explore
-task dev
-
-# Make changes and scan
-task codesub:scan TARGET=mock_repo
-```
-
-The mock repo includes semantic subscriptions for:
-- Module constants (`API_VERSION`)
-- Enum members (`Status.PENDING`)
-- TypedDict fields (`UserDict.email`)
-- Dataclass fields (`ComplexData.tags`)
-- Methods (`Calculator.add`)
-- Properties (`Rectangle.width`)
-- Class variables (`Cache.max_size`)
-
-### Utility Tasks
-
-| Task | Description |
-|------|-------------|
-| `task dev` | Start dev servers (default) |
-| `task help` | Show available tasks |
-| `task clean` | Clean build artifacts |
-| `task clean:all` | Clean everything including deps |
-| `task version` | Show codesub version |
-| `task ci` | Run CI checks (lint + test) |
-| `task pre-commit` | Run pre-commit checks |
-
-## Project Structure
-
-```
-codesub/
-├── src/codesub/          # Main package
-│   ├── cli.py            # CLI interface
-│   ├── api.py            # FastAPI server (REST API)
-│   ├── models.py         # Data models (Subscription, SemanticTarget, Project)
-│   ├── config_store.py   # Per-project config management (.codesub/)
-│   ├── project_store.py  # Multi-project registration
-│   ├── scan_history.py   # Scan history storage
-│   ├── git_repo.py       # Git wrapper
-│   ├── diff_parser.py    # Unified diff parsing
-│   ├── detector.py       # Trigger detection (line-based and semantic)
-│   ├── update_doc.py     # Update document generation
-│   ├── updater.py        # Apply proposals
-│   ├── utils.py          # Target parsing utilities
-│   ├── errors.py         # Custom exceptions
-│   └── semantic/         # Semantic code analysis
-│       ├── __init__.py
-│       ├── fingerprint.py   # Hash computation for constructs
-│       └── python_indexer.py # Python AST parsing via Tree-sitter
-├── frontend/             # React + TypeScript frontend
-│   └── src/
-│       ├── App.tsx       # Main app with multi-project support
-│       ├── api.ts        # API client
-│       ├── types.ts      # TypeScript interfaces
-│       └── components/   # UI components
-├── mock_repo/            # Mock repository for testing
-│   ├── .git_template/    # Git data (rename to .git to use)
-│   ├── config.py         # Sample config file
-│   ├── models.py         # Sample models
-│   └── ...               # Other sample files
-├── tests/                # Test suite (pytest)
-├── data/                 # Server data (gitignored)
-│   ├── projects.json     # Registered projects
-│   └── scan_history/     # Scan results
-├── Taskfile.yml          # Task definitions
-├── pyproject.toml        # Python project config
-└── README.md
-```
-
-## Data Storage
-
-codesub uses two storage locations:
-
-1. **Per-project config** (`.codesub/config.json`): Stored in each git repository where codesub is initialized. Contains subscriptions and baseline ref.
-
-2. **Server data** (`data/` directory): Stored locally in the codesub project root (gitignored). Contains:
-   - `projects.json` - Registered projects for multi-project management
-   - `scan_history/` - Scan results organized by project
+Track critical code paths and get notified in PRs when they change. Integrates with CI to flag changes that need extra review attention.
+
+### Documentation Sync
+
+When documentation references specific line numbers or code sections, subscribe to those sections. You'll know immediately when the code changes and docs need updating.
+
+### Security Monitoring
+
+Subscribe to authentication logic, authorization checks, cryptographic operations, and other security-sensitive code. Any modification triggers a review.
+
+### Onboarding
+
+Create subscriptions for the most important parts of your codebase with descriptive labels. New team members can quickly find and understand critical code.
+
+### API Stability
+
+Track public interfaces, exported functions, and API contracts. Structural changes to these subscriptions indicate breaking changes that need versioning attention.
+
+### Refactoring Safety
+
+Before a large refactoring, subscribe to key behaviors and outputs. Scan after refactoring to verify the important parts still exist and have the expected signatures.
+
+## Symbol Discovery
+
+Not sure what to subscribe to? Use symbol discovery to explore available constructs in any file:
+
+- List all functions, classes, methods, and variables
+- Filter by construct kind (function, method, class, etc.)
+- Search by name pattern
+- See the qualified name to use for subscriptions
 
 ## License
 
