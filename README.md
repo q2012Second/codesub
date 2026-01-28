@@ -6,32 +6,6 @@ Subscribe to code sections and get notified when they change.
 
 codesub is a code monitoring tool that lets you track specific sections of code across your codebase. When tracked code changes, codesub detects it and tells you exactly what changed and why.
 
-## Quick Start
-
-```bash
-# Install
-poetry install
-
-# Initialize in your project
-cd your-project
-codesub init
-
-# Subscribe to code constructs
-codesub add "auth.py::User.validate" --label "User validation"
-codesub add "config.py::API_VERSION" --label "API version"
-codesub add "pricing.py:45-60" --label "Tax calculation"
-
-# List subscriptions
-codesub list
-
-# Scan for changes (compares baseline to HEAD)
-codesub scan
-
-# Discover what you can track in a file
-codesub symbols auth.py
-codesub symbols models.py --kind method
-```
-
 ## Subscription Types
 
 ### Line-Based Subscriptions
@@ -170,63 +144,127 @@ The web UI provides a visual way to manage everything:
 
 ### External API Contracts
 
-Track response schemas from external services (Stripe, Twilio, etc.). When you update your local models to match their API changes, codesub detects it:
+Track response schemas from external services. When Stripe or another provider changes their API, you need to update your code accordingly—codesub alerts you when these structures change.
 
+```bash
+codesub add "schemas/external.py::StripePaymentIntent.status" --label "Stripe payment status"
+```
+
+**What gets tracked:**
 ```python
-# schemas/external.py - Track fields you depend on
 @dataclass
 class StripePaymentIntent:
+    """Response from Stripe POST /v1/payment_intents"""
     id: str
     amount: int
-    status: str  # <-- codesub add "schemas/external.py::StripePaymentIntent.status"
+    currency: str
+    status: str       # <-- TRACKED: "requires_payment_method", "succeeded", etc.
+    client_secret: str
+    created: int
 ```
+
+If `status` changes type (e.g., `str` → `PaymentStatus`) → **STRUCTURAL change**
+If the field is removed → **MISSING**
 
 ### Public API Schemas
 
-Track your own API response structures. Changes here break client integrations:
+Track your own API response structures. Changes here are breaking changes for frontend/mobile clients.
 
-```python
-# schemas/api.py - Breaking change detection
-@dataclass
-class OrderResponse:
-    order_id: str
-    status: str      # <-- Track: clients parse this
-    total: Decimal   # <-- Track: displayed to users
+```bash
+codesub add "schemas/api.py::PricingBreakdown.total" --label "Pricing total field"
 ```
+
+**What gets tracked:**
+```python
+@dataclass
+class PricingBreakdown:
+    """Price breakdown returned to clients"""
+    subtotal: Decimal
+    tax: Decimal
+    shipping: Decimal
+    total: Decimal    # <-- TRACKED: Frontend displays this to users
+```
+
+If `total: Decimal` → `total: float` → **STRUCTURAL change** (type changed)
 
 ### Business Logic
 
-Track revenue-critical calculations and validation rules:
-
-```python
-# services/order.py
-def calculate_pricing(self, items, user) -> PricingBreakdown:
-    # Tax calculation, shipping logic, discounts
-    # Changes here affect revenue - track the whole method
-```
+Track revenue-critical calculations and validation rules.
 
 ```bash
 codesub add "services/order.py::OrderService.calculate_pricing" --label "Pricing calculation"
 ```
 
-### Configuration
-
-Track settings that affect behavior:
-
+**What gets tracked:**
 ```python
-# config.py
-API_VERSION = "v2"           # Breaking change for clients
-FREE_SHIPPING_THRESHOLD = 75  # Affects pricing
-TAX_RATES = {"US-CA": 0.0725} # Affects tax calculation
+def calculate_pricing(self, items: list[OrderItem], user: User) -> PricingBreakdown:
+    """Calculate order totals including tax and shipping."""
+    subtotal = sum(item.subtotal for item in items)
+
+    # Tax calculation based on user region
+    tax_rate = TAX_RATES.get(user.region, TAX_RATES["DEFAULT"])
+    tax = subtotal * Decimal(str(tax_rate))
+
+    # Free shipping over threshold
+    if subtotal >= Decimal(str(FREE_SHIPPING_THRESHOLD)):
+        shipping = Decimal("0.00")
+    else:
+        shipping = self.SHIPPING_RATE
+
+    total = subtotal + tax + shipping
+    ...
 ```
 
-### Security Monitoring
+If the method body changes → **CONTENT change**
+If the signature changes → **STRUCTURAL change**
+If the method is deleted → **MISSING**
 
-Subscribe to authentication logic, authorization checks, cryptographic operations, and other security-sensitive code. Any modification triggers a review.
+### Configuration
 
-### Documentation Sync
+Track settings that affect integrations and business rules.
 
-When documentation references specific line numbers or code sections, subscribe to those sections. You'll know immediately when the code changes and docs need updating.
+```bash
+codesub add "config.py::FREE_SHIPPING_THRESHOLD" --label "Free shipping threshold"
+codesub add "config.py::TAX_RATES" --label "Tax rates"
+```
+
+**What gets tracked:**
+```python
+# Order processing
+FREE_SHIPPING_THRESHOLD = 75.00   # <-- TRACKED: Affects shipping calculation
+
+# Tax rates by region
+TAX_RATES = {                     # <-- TRACKED: Affects tax calculation
+    "US-CA": 0.0725,
+    "US-NY": 0.08,
+    "US-TX": 0.0625,
+    "EU": 0.20,
+    "DEFAULT": 0.0,
+}
+```
+
+If `FREE_SHIPPING_THRESHOLD = 75.00` → `100.00` → **CONTENT change**
+
+### Security-Sensitive Code
+
+Track authentication, authorization, and cryptographic code.
+
+```bash
+codesub add "auth/service.py::AuthService.validate_token" --label "Token validation"
+codesub add "auth/service.py::AuthService.hash_password" --label "Password hashing"
+```
+
+Any modification to these methods triggers review.
+
+### Line-Based: Documentation References
+
+When docs reference specific lines, track those ranges:
+
+```bash
+codesub add "config.py:20-27" --label "Tax rates (referenced in docs)"
+```
+
+If code is added above line 20, codesub proposes updating to `config.py:22-29`.
 
 ## Symbol Discovery
 
