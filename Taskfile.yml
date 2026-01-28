@@ -725,13 +725,13 @@ tasks:
           exit 1
         fi
       - |
-        # Step 2: Register project
-        echo "Registering Python mock repo..."
-        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Python)" 2>/dev/null || echo "  Already registered"
-      - |
-        # Step 3: Initialize codesub in mock repo
+        # Step 2: Initialize codesub in mock repo
         echo "Initializing codesub..."
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
+      - |
+        # Step 3: Register project (must be after codesub init)
+        echo "Registering Python mock repo..."
+        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Python)" 2>/dev/null || echo "  Already registered"
       - |
         # Step 4: Create subscriptions (skip if any exist)
         cd "{{.MOCK_DIR}}"
@@ -807,13 +807,13 @@ tasks:
           exit 1
         fi
       - |
-        # Step 2: Register project
-        echo "Registering Java mock repo..."
-        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Java)" 2>/dev/null || echo "  Already registered"
-      - |
-        # Step 3: Initialize codesub in mock repo
+        # Step 2: Initialize codesub in mock repo
         echo "Initializing codesub..."
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
+      - |
+        # Step 3: Register project (must be after codesub init)
+        echo "Registering Java mock repo..."
+        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Java)" 2>/dev/null || echo "  Already registered"
       - |
         # Step 4: Create subscriptions (skip if any exist)
         cd "{{.MOCK_DIR}}"

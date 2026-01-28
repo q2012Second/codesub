@@ -1,10 +1,12 @@
 """Project storage for codesub."""
 
+import fcntl
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .config_store import ConfigStore
 from .errors import InvalidProjectPathError, ProjectNotFoundError
@@ -32,6 +34,18 @@ class ProjectStore:
     def _ensure_dir(self) -> None:
         """Ensure config directory exists."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        """Acquire exclusive lock on the projects file for read-modify-write operations."""
+        self._ensure_dir()
+        lock_path = self.config_dir / ".projects.lock"
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def _load_data(self) -> dict[str, Any]:
         """Load projects data from disk."""
@@ -115,22 +129,23 @@ class ProjectStore:
                 str(abs_path), "codesub not initialized (run 'codesub init' in the repo)"
             )
 
-        # Check for duplicates
-        existing = self.list_projects()
-        for p in existing:
-            if Path(p.path).resolve() == abs_path:
-                raise InvalidProjectPathError(
-                    str(abs_path), f"project already registered with ID {p.id}"
-                )
+        # Use file lock to prevent race conditions during concurrent adds
+        with self._lock():
+            # Check for duplicates (inside lock to ensure consistency)
+            data = self._load_data()
+            for p in data.get("projects", []):
+                if Path(p["path"]).resolve() == abs_path:
+                    raise InvalidProjectPathError(
+                        str(abs_path), f"project already registered with ID {p['id']}"
+                    )
 
-        # Create project
-        project_name = name or abs_path.name
-        project = Project.create(name=project_name, path=str(abs_path))
+            # Create project
+            project_name = name or abs_path.name
+            project = Project.create(name=project_name, path=str(abs_path))
 
-        # Save
-        data = self._load_data()
-        data["projects"].append(project.to_dict())
-        self._save_data(data)
+            # Save
+            data["projects"].append(project.to_dict())
+            self._save_data(data)
 
         return project
 
@@ -147,16 +162,17 @@ class ProjectStore:
         Raises:
             ProjectNotFoundError: If project doesn't exist.
         """
-        data = self._load_data()
-        projects = data.get("projects", [])
+        with self._lock():
+            data = self._load_data()
+            projects = data.get("projects", [])
 
-        for i, p in enumerate(projects):
-            if p["id"] == project_id:
-                removed = Project.from_dict(projects.pop(i))
-                self._save_data(data)
-                return removed
+            for i, p in enumerate(projects):
+                if p["id"] == project_id:
+                    removed = Project.from_dict(projects.pop(i))
+                    self._save_data(data)
+                    return removed
 
-        raise ProjectNotFoundError(project_id)
+            raise ProjectNotFoundError(project_id)
 
     def update_project(self, project_id: str, name: str) -> Project:
         """
@@ -172,17 +188,18 @@ class ProjectStore:
         Raises:
             ProjectNotFoundError: If project doesn't exist.
         """
-        data = self._load_data()
-        projects = data.get("projects", [])
+        with self._lock():
+            data = self._load_data()
+            projects = data.get("projects", [])
 
-        for p in projects:
-            if p["id"] == project_id:
-                p["name"] = name
-                p["updated_at"] = _utc_now()
-                self._save_data(data)
-                return Project.from_dict(p)
+            for p in projects:
+                if p["id"] == project_id:
+                    p["name"] = name
+                    p["updated_at"] = _utc_now()
+                    self._save_data(data)
+                    return Project.from_dict(p)
 
-        raise ProjectNotFoundError(project_id)
+            raise ProjectNotFoundError(project_id)
 
     def get_project_status(self, project_id: str) -> dict[str, Any]:
         """
