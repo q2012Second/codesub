@@ -1,56 +1,110 @@
-"""API route definitions."""
+"""API endpoint handlers.
 
-from typing import Dict, List, Any
+These endpoints form our public API contract.
+"""
+
+from typing import Optional
+from schemas.api import (
+    CreateOrderRequest,
+    CreateOrderResponse,
+    OrderResponse,
+    ErrorResponse,
+    PaginatedResponse,
+)
+from services import OrderService, PaymentService
+from config import API_VERSION
 
 
-# Route registry
-ROUTES: Dict[str, Dict[str, Any]] = {}
+# Simulated router (in production: FastAPI/Flask)
+router = {}
 
 
-def route(path: str, methods: List[str] = None):
-    """Decorator to register API routes."""
+def get(path: str):
     def decorator(func):
-        ROUTES[path] = {
-            "handler": func,
-            "methods": methods or ["GET"]
-        }
+        router[("GET", path)] = func
         return func
     return decorator
 
 
-@route("/users", methods=["GET"])
-def list_users() -> Dict:
-    """List all users."""
-    return {"users": [], "count": 0}
+def post(path: str):
+    def decorator(func):
+        router[("POST", path)] = func
+        return func
+    return decorator
 
 
-@route("/users/<id>", methods=["GET"])
-def get_user(id: int) -> Dict:
-    """Get user by ID."""
-    return {"user": None}
+# =============================================================================
+# Order Endpoints
+# =============================================================================
+
+@post("/api/orders")
+def create_order(request: CreateOrderRequest, user_id: str) -> CreateOrderResponse:
+    """Create a new order.
+
+    Returns order details with Stripe client_secret for payment.
+    """
+    order_service = OrderService()
+    payment_service = PaymentService()
+
+    # Create order (validation happens inside)
+    # ... order creation logic ...
+
+    # Return response matching CreateOrderResponse schema
+    pass
 
 
-@route("/users", methods=["POST"])
-def create_user(data: Dict) -> Dict:
-    """Create new user."""
-    return {"user": data, "id": 1}
+@get("/api/orders/{order_id}")
+def get_order(order_id: str, user_id: str) -> OrderResponse:
+    """Get order details by ID.
+
+    Returns full order info including tracking if shipped.
+    """
+    pass
 
 
-@route("/products", methods=["GET"])
-def list_products() -> Dict:
-    """List all products."""
-    return {"products": [], "count": 0}
+@get("/api/orders")
+def list_orders(
+    user_id: str,
+    page: int = 1,
+    per_page: int = 20,
+    status: Optional[str] = None,
+) -> PaginatedResponse:
+    """List user's orders with pagination."""
+    pass
 
 
-@route("/orders", methods=["GET", "POST"])
-def orders(data: Dict = None) -> Dict:
-    """Handle orders endpoint."""
-    if data:
-        return {"order": data, "id": 1}
-    return {"orders": [], "count": 0}
+# =============================================================================
+# Webhook Endpoints
+# =============================================================================
+
+@post("/webhooks/stripe")
+def stripe_webhook(payload: bytes, signature: str) -> dict:
+    """Handle Stripe payment webhooks.
+
+    Processes payment_intent.succeeded, payment_failed, etc.
+    """
+    payment_service = PaymentService()
+    # Verify signature and process event
+    pass
 
 
-@route("/health", methods=["GET"])
-def health_check() -> Dict:
-    """Health check endpoint."""
-    return {"status": "healthy", "version": "1.0.0"}
+@post("/webhooks/shipfast")
+def shipfast_webhook(payload: dict) -> dict:
+    """Handle ShipFast shipping webhooks.
+
+    Updates order status when package is in_transit/delivered.
+    """
+    pass
+
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+@get("/health")
+def health_check() -> dict:
+    """Service health check endpoint."""
+    return {
+        "status": "healthy",
+        "api_version": API_VERSION,
+    }

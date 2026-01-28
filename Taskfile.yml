@@ -638,12 +638,12 @@ tasks:
   # MOCK REPOSITORY
   # =============================================================================
   mock:init:
-    desc: Initialize mock_repo for testing (git + register project + sample subscription)
+    desc: Initialize mock_repo for testing (git + register project + sample subscriptions)
     summary: |
-      Sets up the mock repository for testing codesub:
+      Sets up the mock repository (e-commerce order API) for testing codesub:
       1. Initializes git (renames .git_template to .git)
       2. Registers the project with codesub
-      3. Creates a sample subscription to database config
+      3. Creates subscriptions demonstrating real-world use cases
 
       Usage:
         task mock:init
@@ -671,60 +671,60 @@ tasks:
         echo "Initializing codesub in mock_repo..."
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
       - |
-        # Step 4: Create sample line-based subscription (skip if any exist)
+        # Step 4: Create subscriptions (skip if any exist)
         cd "{{.MOCK_DIR}}"
         count=$({{.CODESUB}} list --json 2>/dev/null | grep -c '"id"' || echo "0")
         if [ "$count" -gt "0" ]; then
-          echo "Subscriptions already exist, skipping line-based subscription..."
-        else
-          echo "Creating sample subscription (Database Config)..."
-          {{.CODESUB}} add config.py:10-14 --label "Database Config"
-        fi
-      - |
-        # Step 5: Create semantic subscriptions to showcase tracking
-        # Skip if subscriptions already exist (more than just the line-based one)
-        cd "{{.MOCK_DIR}}"
-        count=$({{.CODESUB}} list --json 2>/dev/null | grep -c '"id"' || echo "0")
-        if [ "$count" -gt "1" ]; then
-          echo "Semantic subscriptions already exist, skipping..."
+          echo "Subscriptions already exist, skipping..."
         else
           echo ""
-          echo "Creating semantic subscriptions..."
+          echo "Creating subscriptions..."
+          echo ""
 
-          # Module constant - tracks value and type changes
-          {{.CODESUB}} add "advanced_types.py::API_VERSION" --label "API Version (semantic)"
+          # --- External API Contracts ---
+          # Track schemas for external services - if they change their API, we need to know
+          echo "External API contracts:"
+          {{.CODESUB}} add "schemas/external.py::StripePaymentIntent.status" --label "Stripe payment status field"
+          {{.CODESUB}} add "schemas/external.py::StripeWebhookEvent.type" --label "Stripe webhook event type"
+          {{.CODESUB}} add "schemas/external.py::ShipFastTrackingEvent.status" --label "ShipFast tracking status"
 
-          # Enum member - tracks value changes and renames
-          {{.CODESUB}} add "advanced_types.py::Status.PENDING" --label "Status.PENDING enum"
+          # --- Public API Schemas ---
+          # Track our API contracts - changes here break client integrations
+          echo ""
+          echo "Public API schemas:"
+          {{.CODESUB}} add "schemas/api.py::PricingBreakdown.total" --label "Pricing total field"
+          {{.CODESUB}} add "schemas/api.py::OrderResponse.status" --label "Order status response field"
+          {{.CODESUB}} add "schemas/api.py::ErrorResponse.error_code" --label "Error response format"
 
-          # TypedDict field - tracks type changes
-          {{.CODESUB}} add "advanced_types.py::UserDict.email" --label "UserDict.email field"
+          # --- Critical Business Logic ---
+          # Track code that affects revenue and correctness
+          echo ""
+          echo "Business logic:"
+          {{.CODESUB}} add "services/order.py::OrderService.calculate_pricing" --label "Pricing calculation"
+          {{.CODESUB}} add "services/order.py::OrderService.validate_order" --label "Order validation"
 
-          # Dataclass field - tracks type and default changes
-          {{.CODESUB}} add "advanced_types.py::ComplexData.tags" --label "ComplexData.tags field"
+          # --- Configuration ---
+          # Track settings that affect integrations
+          echo ""
+          echo "Configuration:"
+          {{.CODESUB}} add "config.py::API_VERSION" --label "API version"
+          {{.CODESUB}} add "config.py::FREE_SHIPPING_THRESHOLD" --label "Free shipping threshold"
+          {{.CODESUB}} add "config.py::TAX_RATES" --label "Tax rates by region"
 
-          # Static method - tracks signature and body
-          {{.CODESUB}} add "advanced_types.py::Calculator.add" --label "Calculator.add method"
-
-          # Property - tracks implementation
-          {{.CODESUB}} add "advanced_types.py::Rectangle.width" --label "Rectangle.width property"
-
-          # Class variable - tracks value
-          {{.CODESUB}} add "advanced_types.py::Cache.max_size" --label "Cache.max_size class var"
-
-          echo "  Created 7 semantic subscriptions"
+          echo ""
+          echo "Created 11 subscriptions"
         fi
       - |
         echo ""
-        echo "Mock repo ready! Subscriptions created:"
+        echo "Mock repo ready! Subscriptions:"
         echo ""
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} list
         echo ""
-        echo "Try these demos:"
-        echo "  1. Change API_VERSION value in advanced_types.py → triggers CONTENT change"
-        echo "  2. Change UserDict.email type to 'str | None' → triggers STRUCTURAL change"
-        echo "  3. Rename Status.PENDING to Status.WAITING → triggers PROPOSAL (rename detected)"
-        echo "  4. Delete Calculator.add method → triggers MISSING"
+        echo "Demo scenarios:"
+        echo "  1. Change PricingBreakdown.total type → STRUCTURAL change (API contract)"
+        echo "  2. Modify calculate_pricing logic → CONTENT change (business logic)"
+        echo "  3. Change FREE_SHIPPING_THRESHOLD value → CONTENT change (config)"
+        echo "  4. Delete validate_order method → MISSING construct"
         echo ""
         echo "Then run: task codesub:scan TARGET=mock_repo"
 

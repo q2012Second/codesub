@@ -1,6 +1,6 @@
-"""Services package."""
+"""Business logic services."""
 
-from .auth import AuthService
-from .database import DatabaseConnection, Repository
+from .order import OrderService
+from .payment import PaymentService
 
-__all__ = ["AuthService", "DatabaseConnection", "Repository"]
+__all__ = ["OrderService", "PaymentService"]

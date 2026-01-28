@@ -1,60 +1,82 @@
-# Mock Repository
+# Mock Repository - Order Management API
 
-**This is a mock repository included with codesub for testing and demonstration purposes.**
-
-It contains sample Python files that you can use to try out codesub's subscription and change detection features without setting up your own project.
+A mock e-commerce order API demonstrating practical codesub subscription scenarios.
 
 ## Setup
-
-The easiest way to set up the mock repo is using the task command:
 
 ```bash
 task mock:init
 ```
 
-This will:
-1. Initialize git (rename `.git_template` to `.git`)
-2. Register the project with codesub
-3. Create a sample subscription for the database config (lines 5-9)
+This initializes git, registers the project, and creates sample subscriptions.
 
-### Manual Setup
-
-Alternatively, initialize manually:
-
-```bash
-cd mock_repo
-mv .git_template .git
-codesub projects add ./mock_repo --name "Mock Repo"
-```
-
-## File Structure
+## Structure
 
 ```
 mock_repo/
-├── config.py          # Constants and settings
-├── models.py          # Data models: User, Product, Order
-├── utils.py           # Utility functions
-├── api/
-│   ├── __init__.py
-│   └── routes.py      # API route definitions
-└── services/
-    ├── __init__.py
-    ├── auth.py        # Authentication service
-    └── database.py    # Database connection
+├── config.py              # App settings, external service URLs
+├── models.py              # Domain models (User, Order, Product)
+├── schemas/
+│   ├── api.py             # Our public API request/response schemas
+│   └── external.py        # External service response schemas
+├── services/
+│   ├── order.py           # Order processing, pricing calculation
+│   └── payment.py         # Stripe payment integration
+└── api/
+    └── routes.py          # API endpoints
 ```
 
-## Suggested Subscriptions
+## Subscription Examples
 
-Try subscribing to these code sections:
+The mock:init task creates subscriptions demonstrating real-world use cases:
 
-| File | Lines | Description |
-|------|-------|-------------|
-| config.py | 5-9 | Database settings |
-| config.py | 12-15 | API configuration |
-| models.py | 9-17 | User dataclass |
-| models.py | 20-32 | Product dataclass |
-| utils.py | 8-10 | hash_password function |
-| services/auth.py | 16-28 | login method |
-| api/routes.py | 22-25 | list_users route |
+### External API Contracts
+Track schemas for external services. If they change their API, we need to know:
 
-After adding subscriptions, try modifying some files and running a scan to see how codesub detects changes.
+| Target | Why Track |
+|--------|-----------|
+| `schemas/external.py::StripePaymentIntent.status` | Payment status determines order flow |
+| `schemas/external.py::StripeWebhookEvent.type` | Webhook event routing |
+| `schemas/external.py::ShipFastTrackingEvent.status` | Shipping status updates |
+
+### Public API Schemas
+Track our API contracts. Changes here break client integrations:
+
+| Target | Why Track |
+|--------|-----------|
+| `schemas/api.py::PricingBreakdown.total` | Frontend displays this to users |
+| `schemas/api.py::OrderResponse.status` | Order status page depends on this |
+| `schemas/api.py::ErrorResponse.error_code` | Client error handling |
+
+### Critical Business Logic
+Track code that affects revenue and correctness:
+
+| Target | Why Track |
+|--------|-----------|
+| `services/order.py::OrderService.calculate_pricing` | Pricing calculation affects revenue |
+| `services/order.py::OrderService.validate_order` | Validation rules affect UX |
+
+### Configuration
+Track settings that affect business logic:
+
+| Target | Why Track |
+|--------|-----------|
+| `config.py::API_VERSION` | Breaking change for API clients |
+| `config.py::FREE_SHIPPING_THRESHOLD` | Affects shipping cost calculation |
+| `config.py::TAX_RATES` | Affects tax calculation |
+
+## Demo Scenarios
+
+After `task mock:init`, try these changes and run `task codesub:scan TARGET=mock_repo`:
+
+1. **Change API response field type** - Change `PricingBreakdown.total` from `Decimal` to `float`:
+   - Detects STRUCTURAL change in API schema
+
+2. **Modify pricing logic** - Change the shipping calculation in `calculate_pricing`:
+   - Detects CONTENT change in business logic
+
+3. **Update config value** - Change `FREE_SHIPPING_THRESHOLD` from 75.00 to 100.00:
+   - Detects CONTENT change in configuration
+
+4. **Delete a tracked method** - Remove `validate_order` method:
+   - Detects MISSING construct

@@ -1,52 +1,69 @@
-"""Data models for the application."""
+"""Domain models for the order management system."""
 
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
+from enum import Enum
+from typing import Optional
+
+
+class OrderStatus(Enum):
+    """Order lifecycle states."""
+    PENDING = "pending"
+    PAID = "paid"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+    REFUNDED = "refunded"
 
 
 @dataclass
 class User:
-    """Represents a user in the system."""
-    id: int
-    username: str
+    """Customer account."""
+    id: str
     email: str
-    created_at: datetime
-    is_active: bool = True
-
-    def full_name(self) -> str:
-        return self.username
+    name: str
+    region: str = "US-CA"
+    created_at: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
 class Product:
-    """Represents a product in the catalog."""
-    id: int
+    """Catalog item."""
+    id: str
     name: str
-    price: float
-    description: Optional[str] = None
+    price: Decimal
     stock: int = 0
 
-    def is_available(self) -> bool:
-        return self.stock > 0
+    def is_available(self, quantity: int = 1) -> bool:
+        return self.stock >= quantity
 
-    def apply_discount(self, percent: float) -> float:
-        """Apply discount and return new price."""
-        return self.price * (1 - percent / 100)
+
+@dataclass
+class OrderItem:
+    """Line item in an order."""
+    product_id: str
+    product_name: str
+    quantity: int
+    unit_price: Decimal
+
+    @property
+    def subtotal(self) -> Decimal:
+        return self.unit_price * self.quantity
 
 
 @dataclass
 class Order:
-    """Represents a customer order."""
-    id: int
-    user_id: int
-    items: List[int]
-    total: float
-    status: str = "pending"
-    created_at: Optional[datetime] = None
+    """Customer order."""
+    id: str
+    user_id: str
+    items: list[OrderItem]
+    status: OrderStatus = OrderStatus.PENDING
+    shipping_address: Optional[str] = None
+    stripe_payment_id: Optional[str] = None
+    shipfast_tracking_id: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
 
-    def is_completed(self) -> bool:
-        return self.status == "completed"
-
-    def cancel(self) -> None:
-        self.status = "cancelled"
+    @property
+    def subtotal(self) -> Decimal:
+        return sum(item.subtotal for item in self.items)
