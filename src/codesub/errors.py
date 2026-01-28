@@ -114,3 +114,23 @@ class ScanNotFoundError(CodesubError):
     def __init__(self, scan_id: str):
         self.scan_id = scan_id
         super().__init__(f"Scan not found: {scan_id}")
+
+
+class UnsupportedLanguageError(CodesubError):
+    """Raised when a language is not supported for semantic subscriptions.
+
+    Attributes:
+        language: The unsupported language identifier.
+        supported: List of currently supported languages.
+        hint: Optional hint for the user.
+    """
+
+    def __init__(
+        self, language: str, supported: list[str], hint: str | None = None
+    ) -> None:
+        self.language = language
+        self.supported = supported
+        msg = f"Unsupported language '{language}'. Supported: {', '.join(supported) or '<none>'}."
+        if hint:
+            msg = f"{msg} {hint}"
+        super().__init__(msg)

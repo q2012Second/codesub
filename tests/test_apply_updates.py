@@ -6,7 +6,7 @@ import pytest
 
 from codesub.config_store import ConfigStore
 from codesub.git_repo import GitRepo
-from codesub.models import Anchor, Subscription
+from codesub.models import Anchor, SemanticTarget, Subscription
 from codesub.updater import Updater
 
 from .conftest import commit_changes
@@ -306,3 +306,104 @@ class TestApplyUpdates:
         # Should still apply but with warning
         assert len(applied) == 1
         assert any("differs significantly" in w for w in warnings)
+
+    def test_apply_semantic_rename_updates_qualname(self, git_repo):
+        """Apply should update semantic qualname when construct is renamed."""
+        repo = GitRepo(git_repo)
+        store = ConfigStore(git_repo)
+        base_ref = repo.head()
+
+        store.init(base_ref)
+
+        # Create a semantic subscription
+        sub = Subscription.create(
+            path="test.txt",
+            start_line=2,
+            end_line=3,
+            semantic=SemanticTarget(
+                language="python",
+                kind="variable",
+                qualname="OLD_NAME",
+                role="const",
+                interface_hash="abc123",
+                body_hash="def456",
+            ),
+        )
+        store.add_subscription(sub)
+
+        # Apply proposal with new qualname
+        update_data = {
+            "base_ref": base_ref,
+            "target_ref": base_ref,
+            "proposals": [
+                {
+                    "subscription_id": sub.id,
+                    "new_path": "test.txt",
+                    "new_start": 2,
+                    "new_end": 3,
+                    "new_qualname": "NEW_NAME",
+                    "reasons": ["semantic_location"],
+                }
+            ],
+        }
+
+        updater = Updater(store, repo)
+        applied, warnings = updater.apply(update_data)
+
+        assert len(applied) == 1
+
+        # Verify qualname was updated
+        updated_sub = store.get_subscription(sub.id[:8])
+        assert updated_sub.semantic is not None
+        assert updated_sub.semantic.qualname == "NEW_NAME"
+        # Other semantic fields should remain unchanged
+        assert updated_sub.semantic.language == "python"
+        assert updated_sub.semantic.kind == "variable"
+        assert updated_sub.semantic.role == "const"
+
+    def test_apply_semantic_kind_change(self, git_repo):
+        """Apply should update semantic kind when specified."""
+        repo = GitRepo(git_repo)
+        store = ConfigStore(git_repo)
+        base_ref = repo.head()
+
+        store.init(base_ref)
+
+        sub = Subscription.create(
+            path="test.txt",
+            start_line=2,
+            end_line=3,
+            semantic=SemanticTarget(
+                language="python",
+                kind="variable",
+                qualname="Config",
+                role=None,
+                interface_hash="abc123",
+                body_hash="def456",
+            ),
+        )
+        store.add_subscription(sub)
+
+        # Apply proposal with new kind (unlikely but testing the feature)
+        update_data = {
+            "base_ref": base_ref,
+            "target_ref": base_ref,
+            "proposals": [
+                {
+                    "subscription_id": sub.id,
+                    "new_path": "test.txt",
+                    "new_start": 2,
+                    "new_end": 3,
+                    "new_kind": "class",
+                    "reasons": ["semantic_location"],
+                }
+            ],
+        }
+
+        updater = Updater(store, repo)
+        applied, warnings = updater.apply(update_data)
+
+        assert len(applied) == 1
+
+        updated_sub = store.get_subscription(sub.id[:8])
+        assert updated_sub.semantic.kind == "class"

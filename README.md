@@ -22,11 +22,18 @@ When lines around your subscription shift (due to code added/removed elsewhere i
 
 Track code constructs by their identity, not their location. Semantic subscriptions follow functions, classes, methods, and variables even as they move around the file or get refactored.
 
-**Example targets:**
+**Example targets (Python):**
 - `auth.py::User.validate` — Track a method
 - `config.py::API_VERSION` — Track a constant
 - `models.py::User.email` — Track a class field
 - `types.py::Status.PENDING` — Track an enum member
+
+**Example targets (Java):**
+- `Calculator.java::Calculator.add(int,int)` — Track a method (with parameter types for overload safety)
+- `Config.java::Config.MAX_RETRIES` — Track a static final constant
+- `User.java::User.User(String)` — Track a constructor
+- `Status.java::Status.PENDING` — Track an enum constant
+- `Service.java::Service` — Track a class declaration
 
 **Supported constructs (Python):**
 - Functions and methods
@@ -36,6 +43,14 @@ Track code constructs by their identity, not their location. Semantic subscripti
 - Enum members
 - Dataclass fields
 - TypedDict fields
+
+**Supported constructs (Java):**
+- Classes, interfaces, and enums
+- Methods and constructors (with overload-safe qualified names)
+- Fields (including multi-declarator: `int x, y;`)
+- Static final constants
+- Enum constants
+- Nested classes
 
 Semantic subscriptions survive refactoring—if a function moves to a different line, gets reformatted, or has code added around it, the subscription stays attached to the right construct.
 
@@ -265,6 +280,192 @@ codesub add "config.py:20-27" --label "Tax rates (referenced in docs)"
 ```
 
 If code is added above line 20, codesub proposes updating to `config.py:22-29`.
+
+## Java Examples
+
+### Service Layer Methods
+
+Track critical service methods with overload-safe qualified names:
+
+```bash
+codesub add "PaymentService.java::PaymentService.processPayment(Order,PaymentMethod)" --label "Payment processing"
+```
+
+**What gets tracked:**
+```java
+public class PaymentService {
+
+    public PaymentResult processPayment(Order order, PaymentMethod method) {
+        // Validate payment method
+        validatePaymentMethod(method);
+
+        // Calculate final amount
+        BigDecimal amount = order.getTotal();
+
+        // Process with payment gateway
+        return gateway.charge(method, amount);
+    }
+
+    // Overloaded version - tracked separately
+    public PaymentResult processPayment(Order order) {
+        return processPayment(order, order.getDefaultPaymentMethod());
+    }
+}
+```
+
+If the method body changes → **CONTENT change**
+If the return type or parameters change → **STRUCTURAL change**
+
+### Interface Contracts
+
+Track interface methods that define your API contracts:
+
+```bash
+codesub add "OrderRepository.java::OrderRepository.findByStatus(OrderStatus)" --label "Order query interface"
+```
+
+**What gets tracked:**
+```java
+public interface OrderRepository {
+    List<Order> findByStatus(OrderStatus status);  // <-- TRACKED
+    Optional<Order> findById(Long id);
+    void save(Order order);
+}
+```
+
+### Entity Fields
+
+Track JPA entities and their fields:
+
+```bash
+codesub add "Order.java::Order.status" --label "Order status field"
+codesub add "Order.java::Order.total" --label "Order total field"
+```
+
+**What gets tracked:**
+```java
+@Entity
+@Table(name = "orders")
+public class Order {
+    @Id
+    @GeneratedValue
+    private Long id;
+
+    @Enumerated(EnumType.STRING)
+    private OrderStatus status;    // <-- TRACKED
+
+    @Column(precision = 10, scale = 2)
+    private BigDecimal total;      // <-- TRACKED
+
+    @ManyToOne
+    private Customer customer;
+}
+```
+
+If `@Enumerated(EnumType.STRING)` is removed → **STRUCTURAL change** (annotation changed)
+
+### Configuration Constants
+
+Track static final constants:
+
+```bash
+codesub add "AppConfig.java::AppConfig.MAX_RETRY_ATTEMPTS" --label "Max retries"
+codesub add "AppConfig.java::AppConfig.API_TIMEOUT_MS" --label "API timeout"
+```
+
+**What gets tracked:**
+```java
+public final class AppConfig {
+    public static final int MAX_RETRY_ATTEMPTS = 3;     // <-- TRACKED
+    public static final long API_TIMEOUT_MS = 30000;    // <-- TRACKED
+    public static final String API_VERSION = "v2";
+}
+```
+
+If `MAX_RETRY_ATTEMPTS = 3` → `5` → **CONTENT change**
+
+### Enum Values
+
+Track enum constants that define business states:
+
+```bash
+codesub add "OrderStatus.java::OrderStatus.PENDING" --label "Pending status"
+codesub add "OrderStatus.java::OrderStatus" --label "Order status enum"
+```
+
+**What gets tracked:**
+```java
+public enum OrderStatus {
+    PENDING("Awaiting payment"),     // <-- TRACKED (if subscribed)
+    PROCESSING("Being prepared"),
+    SHIPPED("In transit"),
+    DELIVERED("Completed"),
+    CANCELLED("Cancelled");
+
+    private final String description;
+
+    OrderStatus(String description) {
+        this.description = description;
+    }
+}
+```
+
+### Constructors
+
+Track constructors, especially those with validation logic:
+
+```bash
+codesub add "User.java::User.User(String,String)" --label "User constructor"
+```
+
+**What gets tracked:**
+```java
+public class User {
+    private final String email;
+    private final String name;
+
+    public User(String email, String name) {  // <-- TRACKED
+        if (email == null || !email.contains("@")) {
+            throw new IllegalArgumentException("Invalid email");
+        }
+        this.email = email.toLowerCase();
+        this.name = name;
+    }
+}
+```
+
+### Discovering Java Symbols
+
+Use symbol discovery to explore available constructs:
+
+```bash
+# List all constructs in a Java file
+codesub symbols src/main/java/com/example/OrderService.java
+
+# Filter by kind
+codesub symbols OrderService.java --kind method
+codesub symbols OrderStatus.java --kind enum
+
+# Search by name
+codesub symbols OrderService.java --grep process
+```
+
+Output:
+```
+Constructs in OrderService.java (5):
+
+  class      OrderService
+             Lines: 1-45
+             FQN:   OrderService.java::OrderService
+
+  method     OrderService.processOrder(Order)
+             Lines: 10-25
+             FQN:   OrderService.java::OrderService.processOrder(Order)
+
+  method     OrderService.validateOrder(Order)
+             Lines: 27-35
+             FQN:   OrderService.java::OrderService.validateOrder(Order)
+```
 
 ## Symbol Discovery
 

@@ -3,27 +3,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 
 import tree_sitter
 import tree_sitter_python as tspython
 
+from .construct import Construct
 from .fingerprint import compute_body_hash, compute_interface_hash
-
-
-@dataclass(frozen=True)
-class Construct:
-    """A parsed code construct."""
-
-    path: str
-    kind: str  # "variable"|"field"|"method"
-    qualname: str  # "MAX_RETRIES" | "User.role"
-    role: str | None  # "const" for constants
-    start_line: int
-    end_line: int
-    interface_hash: str
-    body_hash: str
-    has_parse_error: bool = False
 
 
 class PythonIndexer:

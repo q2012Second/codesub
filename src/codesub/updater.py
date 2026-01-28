@@ -112,6 +112,15 @@ class Updater:
                 sub.end_line = new_end
                 sub.updated_at = _utc_now()
 
+                # Update semantic target if qualname changed (construct was renamed)
+                new_qualname = prop.get("new_qualname")
+                new_kind = prop.get("new_kind")
+                if sub.semantic and (new_qualname or new_kind):
+                    if new_qualname:
+                        sub.semantic.qualname = new_qualname
+                    if new_kind:
+                        sub.semantic.kind = new_kind
+
                 # Re-snapshot anchors
                 context_before, watched_lines, context_after = extract_anchors(
                     new_lines, new_start, new_end, context=2

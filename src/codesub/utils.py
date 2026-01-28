@@ -46,13 +46,13 @@ def parse_target_spec(spec: str) -> LineTarget | SemanticTargetSpec:
         path = Path(path).as_posix()
 
         # Check for kind prefix: "field:User.role"
-        # Valid kinds are: variable, field, method
+        # Valid kinds are: variable, field, method, class, interface, enum
         # Note: "const" is a role, not a kind - constants are kind="variable" with role="const"
         kind = None
         qualname = rest
         if ":" in rest and not rest.startswith(":"):
             maybe_kind, maybe_qualname = rest.split(":", 1)
-            if maybe_kind in ("variable", "field", "method"):
+            if maybe_kind in ("variable", "field", "method", "class", "interface", "enum"):
                 kind = maybe_kind
                 qualname = maybe_qualname
 

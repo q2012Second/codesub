@@ -21,6 +21,7 @@ from .errors import (
     ProjectNotFoundError,
     InvalidProjectPathError,
     ScanNotFoundError,
+    UnsupportedLanguageError,
 )
 from .git_repo import GitRepo
 from .models import Anchor, Subscription, SemanticTarget
@@ -292,7 +293,7 @@ def _create_subscription_from_request(
     request: SubscriptionCreateRequest,
 ) -> Subscription:
     """Create a subscription from a request, handling both line-based and semantic targets."""
-    from .semantic import PythonIndexer
+    from .semantic import get_indexer_for_path
 
     target = parse_target_spec(request.location)
 
@@ -301,7 +302,7 @@ def _create_subscription_from_request(
         lines = repo.show_file(baseline, target.path)
         source = "\n".join(lines)
 
-        indexer = PythonIndexer()
+        language, indexer = get_indexer_for_path(target.path)
         construct = indexer.find_construct(
             source, target.path, target.qualname, target.kind
         )
@@ -323,7 +324,7 @@ def _create_subscription_from_request(
 
         # Create semantic target
         semantic = SemanticTarget(
-            language="python",
+            language=language,
             kind=construct.kind,
             qualname=construct.qualname,
             role=construct.role,
@@ -412,6 +413,7 @@ ERROR_STATUS_CODES: dict[type, int] = {
     ProjectNotFoundError: 404,
     InvalidProjectPathError: 400,
     ScanNotFoundError: 404,
+    UnsupportedLanguageError: 400,
 }
 
 

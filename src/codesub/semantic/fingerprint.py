@@ -52,9 +52,13 @@ def compute_body_hash(node: "tree_sitter.Node | None", source_bytes: bytes) -> s
 
 
 def _normalize_params(params_node: "tree_sitter.Node", source_bytes: bytes) -> str:
-    """Extract normalized parameter representation including types and defaults."""
+    """Extract normalized parameter representation including types and defaults.
+
+    Supports both Python and Java parameter styles.
+    """
     parts = []
     for child in params_node.children:
+        # Python parameter types
         if child.type in (
             "identifier",
             "typed_parameter",
@@ -68,6 +72,20 @@ def _normalize_params(params_node: "tree_sitter.Node", source_bytes: bytes) -> s
             # Normalize whitespace
             text = " ".join(text.split())
             parts.append(text)
+        # Java parameter types
+        elif child.type in ("formal_parameter", "spread_parameter"):
+            # Extract type only, exclude parameter name for interface hash
+            # This makes the hash stable across parameter renames
+            name_node = child.child_by_field_name("name")
+            if name_node:
+                # Get text up to (but not including) the name
+                text = source_bytes[child.start_byte : name_node.start_byte].decode()
+            else:
+                text = source_bytes[child.start_byte : child.end_byte].decode()
+            # Normalize whitespace
+            text = " ".join(text.split())
+            if text:
+                parts.append(text)
     return ",".join(parts)
 
 

@@ -294,9 +294,29 @@ class Detector:
         status_map: dict[str, str],
     ) -> tuple[Trigger | None, Proposal | None]:
         """Check semantic subscription for changes."""
-        from .semantic import PythonIndexer
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer
 
-        indexer = PythonIndexer()
+        assert sub.semantic is not None  # Type narrowing
+
+        try:
+            indexer = get_indexer(sub.semantic.language)
+        except UnsupportedLanguageError as e:
+            # Return AMBIGUOUS trigger for unsupported languages
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=sub.path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["unsupported_language"],
+                    matching_hunks=[],
+                    change_type="AMBIGUOUS",
+                    details={"error": str(e)},
+                ),
+                None,
+            )
 
         # Resolve file rename
         old_path = sub.path
@@ -327,9 +347,9 @@ class Detector:
                 new_source = "\n".join(self.repo.show_file(target_ref, new_path))
             else:
                 # Working directory
-                with open(self.repo.root / new_path) as f:
+                with open(self.repo.root / new_path, encoding="utf-8") as f:
                     new_source = f.read()
-        except Exception:
+        except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
             return (
                 Trigger(
                     subscription_id=sub.id,
@@ -343,8 +363,6 @@ class Detector:
                 ),
                 None,
             )
-
-        assert sub.semantic is not None  # Type narrowing
 
         # Stage 1: Exact match by qualname
         old_construct = indexer.find_construct(

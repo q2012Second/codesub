@@ -13,6 +13,7 @@ fastapi = ">=0.109.0"
 uvicorn = {version = ">=0.27.0", extras = ["standard"]}
 tree-sitter = ">=0.21.0"
 tree-sitter-python = ">=0.21.0"
+tree-sitter-java = ">=0.21.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0"

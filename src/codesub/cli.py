@@ -138,9 +138,14 @@ def _add_semantic_subscription(
     args: argparse.Namespace,
 ) -> int:
     """Add a semantic subscription."""
-    from .semantic import PythonIndexer
+    from .errors import UnsupportedLanguageError
+    from .semantic import get_indexer_for_path
 
-    indexer = PythonIndexer()
+    try:
+        language, indexer = get_indexer_for_path(target.path)
+    except UnsupportedLanguageError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     lines = repo.show_file(baseline, target.path)
     source = "\n".join(lines)
@@ -165,7 +170,7 @@ def _add_semantic_subscription(
 
     # Create semantic target
     semantic = SemanticTarget(
-        language="python",
+        language=language,
         kind=construct.kind,
         qualname=construct.qualname,
         role=construct.role,
@@ -470,9 +475,15 @@ def cmd_symbols(args: argparse.Namespace) -> int:
         lines = repo.show_file(ref, args.path)
         source = "\n".join(lines)
 
-        from .semantic import PythonIndexer
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer_for_path
 
-        indexer = PythonIndexer()
+        try:
+            _, indexer = get_indexer_for_path(args.path)
+        except UnsupportedLanguageError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
         constructs = indexer.index_file(source, args.path)
 
         # Filter by kind if specified
@@ -623,7 +634,7 @@ def create_parser() -> argparse.ArgumentParser:
     symbols_parser.add_argument("--ref", help="Git ref (default: baseline)")
     symbols_parser.add_argument(
         "--kind",
-        choices=["variable", "field", "method"],
+        choices=["variable", "field", "method", "class", "interface", "enum"],
         help="Filter by construct kind",
     )
     symbols_parser.add_argument("--grep", help="Filter by name pattern")
