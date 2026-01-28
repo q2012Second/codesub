@@ -515,6 +515,29 @@ task codesub:scan TARGET=mock_repos/java
 
 See `mock_repos/python/README.md` and `mock_repos/java/README.md` for detailed examples.
 
+## Quickstart
+
+```bash
+# 1. Install Taskfile (https://taskfile.dev)
+brew install go-task  # macOS
+# or: sh -c "$(curl -fsSL https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
+
+# 2. Install dependencies
+task setup
+
+# 3. Initialize a mock repository with sample subscriptions
+task mock:init
+
+# 4a. Use from CLI
+task codesub:list TARGET=mock_repos/python
+task codesub:scan TARGET=mock_repos/python
+
+# 4b. Or start the web interface
+task dev
+# Backend: http://localhost:8000
+# Frontend: http://localhost:5173
+```
+
 ## License
 
 MIT
