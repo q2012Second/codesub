@@ -478,17 +478,22 @@ Not sure what to subscribe to? Use symbol discovery to explore available constru
 
 ## Try It Out
 
-The `mock_repo/` directory contains a sample e-commerce API you can experiment with:
+The `mock_repos/` directory contains sample e-commerce APIs in both Python and Java:
 
 ```bash
-# Set up the mock repository
+# Set up both mock repositories
 task mock:init
 
-# View the created subscriptions
-cd mock_repo && codesub list
+# Or initialize individually
+task mock:init:python
+task mock:init:java
+
+# View subscriptions
+task codesub:list TARGET=mock_repos/python
+task codesub:list TARGET=mock_repos/java
 ```
 
-This creates 11 subscriptions tracking:
+Each mock repo creates 11 subscriptions tracking:
 - **External API schemas** - Stripe payment status, webhook event types
 - **Public API schemas** - Pricing breakdown, order response fields
 - **Business logic** - Pricing calculation, order validation methods
@@ -497,14 +502,18 @@ This creates 11 subscriptions tracking:
 Try making changes and scanning:
 
 ```bash
-# Make a change (e.g., edit FREE_SHIPPING_THRESHOLD in config.py)
-# Then scan
-codesub scan
+# Python example
+cd mock_repos/python
+# Edit FREE_SHIPPING_THRESHOLD in config.py
+task codesub:scan TARGET=mock_repos/python
 
-# Output shows: CONTENT change detected in "Free shipping threshold"
+# Java example
+cd mock_repos/java
+# Edit FREE_SHIPPING_THRESHOLD in src/main/java/.../config/AppConfig.java
+task codesub:scan TARGET=mock_repos/java
 ```
 
-See `mock_repo/README.md` for detailed examples of each change type.
+See `mock_repos/python/README.md` and `mock_repos/java/README.md` for detailed examples.
 
 ## License
 

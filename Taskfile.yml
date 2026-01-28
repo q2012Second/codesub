@@ -635,40 +635,54 @@ tasks:
       - task: test:unit
 
   # =============================================================================
-  # MOCK REPOSITORY
+  # MOCK REPOSITORIES
   # =============================================================================
   mock:init:
-    desc: Initialize mock_repo for testing (git + register project + sample subscriptions)
+    desc: Initialize both mock repos (Python + Java)
+    deps: [mock:init:python, mock:init:java]
+    cmds:
+      - |
+        echo ""
+        echo "Both mock repositories initialized!"
+        echo ""
+        echo "  Python: mock_repos/python/"
+        echo "  Java:   mock_repos/java/"
+        echo ""
+        echo "Try: task codesub:scan TARGET=mock_repos/python"
+        echo "     task codesub:scan TARGET=mock_repos/java"
+
+  mock:init:python:
+    desc: Initialize Python mock repo (e-commerce order API)
     summary: |
-      Sets up the mock repository (e-commerce order API) for testing codesub:
+      Sets up the Python mock repository for testing codesub:
       1. Initializes git (renames .git_template to .git)
       2. Registers the project with codesub
       3. Creates subscriptions demonstrating real-world use cases
 
       Usage:
-        task mock:init
+        task mock:init:python
     vars:
-      MOCK_DIR: '{{.ROOT_DIR}}/mock_repo'
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repos/python'
     cmds:
       - |
         # Step 1: Initialize git repo
         if [ -d "{{.MOCK_DIR}}/.git_template" ]; then
-          echo "Initializing mock_repo git..."
+          echo "Initializing Python mock repo git..."
           mv "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
           echo "  Git initialized"
         elif [ -d "{{.MOCK_DIR}}/.git" ]; then
           echo "  Git already initialized"
         else
-          echo "Error: No .git or .git_template found in mock_repo"
+          echo "Error: No .git or .git_template found in mock_repos/python"
           exit 1
         fi
       - |
         # Step 2: Register project
-        echo "Registering mock_repo project..."
-        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo" 2>/dev/null || echo "  Already registered"
+        echo "Registering Python mock repo..."
+        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Python)" 2>/dev/null || echo "  Already registered"
       - |
-        # Step 3: Initialize codesub in mock_repo
-        echo "Initializing codesub in mock_repo..."
+        # Step 3: Initialize codesub in mock repo
+        echo "Initializing codesub..."
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
       - |
         # Step 4: Create subscriptions (skip if any exist)
@@ -678,18 +692,16 @@ tasks:
           echo "Subscriptions already exist, skipping..."
         else
           echo ""
-          echo "Creating subscriptions..."
+          echo "Creating Python subscriptions..."
           echo ""
 
           # --- External API Contracts ---
-          # Track schemas for external services - if they change their API, we need to know
           echo "External API contracts:"
           {{.CODESUB}} add "schemas/external.py::StripePaymentIntent.status" --label "Stripe payment status field"
           {{.CODESUB}} add "schemas/external.py::StripeWebhookEvent.type" --label "Stripe webhook event type"
           {{.CODESUB}} add "schemas/external.py::ShipFastTrackingEvent.status" --label "ShipFast tracking status"
 
           # --- Public API Schemas ---
-          # Track our API contracts - changes here break client integrations
           echo ""
           echo "Public API schemas:"
           {{.CODESUB}} add "schemas/api.py::PricingBreakdown.total" --label "Pricing total field"
@@ -697,14 +709,12 @@ tasks:
           {{.CODESUB}} add "schemas/api.py::ErrorResponse.error_code" --label "Error response format"
 
           # --- Critical Business Logic ---
-          # Track code that affects revenue and correctness
           echo ""
           echo "Business logic:"
           {{.CODESUB}} add "services/order.py::OrderService.calculate_pricing" --label "Pricing calculation"
           {{.CODESUB}} add "services/order.py::OrderService.validate_order" --label "Order validation"
 
           # --- Configuration ---
-          # Track settings that affect integrations
           echo ""
           echo "Configuration:"
           {{.CODESUB}} add "config.py::API_VERSION" --label "API version"
@@ -712,33 +722,130 @@ tasks:
           {{.CODESUB}} add "config.py::TAX_RATES" --label "Tax rates by region"
 
           echo ""
-          echo "Created 11 subscriptions"
+          echo "Created 11 Python subscriptions"
         fi
       - |
         echo ""
-        echo "Mock repo ready! Subscriptions:"
+        echo "Python mock repo ready! Subscriptions:"
         echo ""
         cd "{{.MOCK_DIR}}" && {{.CODESUB}} list
         echo ""
-        echo "Demo scenarios:"
-        echo "  1. Change PricingBreakdown.total type → STRUCTURAL change (API contract)"
-        echo "  2. Modify calculate_pricing logic → CONTENT change (business logic)"
-        echo "  3. Change FREE_SHIPPING_THRESHOLD value → CONTENT change (config)"
-        echo "  4. Delete validate_order method → MISSING construct"
-        echo ""
-        echo "Then run: task codesub:scan TARGET=mock_repo"
+        echo "Demo: task codesub:scan TARGET=mock_repos/python"
 
-  mock:reset:
-    desc: Reset mock_repo to clean state (remove .git, .codesub)
+  mock:init:java:
+    desc: Initialize Java mock repo (e-commerce order API)
+    summary: |
+      Sets up the Java mock repository for testing codesub:
+      1. Initializes git (renames .git_template to .git)
+      2. Registers the project with codesub
+      3. Creates subscriptions demonstrating Java semantic tracking
+
+      Usage:
+        task mock:init:java
     vars:
-      MOCK_DIR: '{{.ROOT_DIR}}/mock_repo'
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repos/java'
+      SRC_PREFIX: 'src/main/java/com/example/orderapi'
     cmds:
       - |
-        echo "Resetting mock_repo..."
+        # Step 1: Initialize git repo
+        if [ -d "{{.MOCK_DIR}}/.git_template" ]; then
+          echo "Initializing Java mock repo git..."
+          mv "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
+          echo "  Git initialized"
+        elif [ -d "{{.MOCK_DIR}}/.git" ]; then
+          echo "  Git already initialized"
+        else
+          echo "Error: No .git or .git_template found in mock_repos/java"
+          exit 1
+        fi
+      - |
+        # Step 2: Register project
+        echo "Registering Java mock repo..."
+        {{.CODESUB}} projects add "{{.MOCK_DIR}}" --name "Mock Repo (Java)" 2>/dev/null || echo "  Already registered"
+      - |
+        # Step 3: Initialize codesub in mock repo
+        echo "Initializing codesub..."
+        cd "{{.MOCK_DIR}}" && {{.CODESUB}} init 2>/dev/null || true
+      - |
+        # Step 4: Create subscriptions (skip if any exist)
+        cd "{{.MOCK_DIR}}"
+        count=$({{.CODESUB}} list --json 2>/dev/null | grep -c '"id"' || echo "0")
+        if [ "$count" -gt "0" ]; then
+          echo "Subscriptions already exist, skipping..."
+        else
+          echo ""
+          echo "Creating Java subscriptions..."
+          echo ""
+
+          # --- External API Contracts ---
+          echo "External API contracts:"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/external/StripePaymentIntent.java::StripePaymentIntent.status" --label "Stripe payment status field"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/external/StripeWebhookEvent.java::StripeWebhookEvent.type" --label "Stripe webhook event type"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/external/ShipFastTrackingEvent.java::ShipFastTrackingEvent.status" --label "ShipFast tracking status"
+
+          # --- Public API Schemas ---
+          echo ""
+          echo "Public API schemas:"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/api/PricingBreakdown.java::PricingBreakdown.total" --label "Pricing total field"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/api/OrderResponse.java::OrderResponse.status" --label "Order status response field"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/schema/api/ErrorResponse.java::ErrorResponse.errorCode" --label "Error code field"
+
+          # --- Critical Business Logic ---
+          echo ""
+          echo "Business logic:"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/service/OrderService.java::OrderService.calculatePricing(List<OrderItem>,User)" --label "Pricing calculation"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/service/OrderService.java::OrderService.validateOrder(List<OrderItem>,User)" --label "Order validation"
+
+          # --- Configuration ---
+          echo ""
+          echo "Configuration:"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/config/AppConfig.java::AppConfig.API_VERSION" --label "API version"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/config/AppConfig.java::AppConfig.FREE_SHIPPING_THRESHOLD" --label "Free shipping threshold"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/config/AppConfig.java::AppConfig.TAX_RATES" --label "Tax rates"
+
+          echo ""
+          echo "Created 11 Java subscriptions"
+        fi
+      - |
+        echo ""
+        echo "Java mock repo ready! Subscriptions:"
+        echo ""
+        cd "{{.MOCK_DIR}}" && {{.CODESUB}} list
+        echo ""
+        echo "Demo: task codesub:scan TARGET=mock_repos/java"
+
+  mock:reset:
+    desc: Reset both mock repos to clean state
+    deps: [mock:reset:python, mock:reset:java]
+    cmds:
+      - echo "Both mock repos reset. Run 'task mock:init' to set up again."
+
+  mock:reset:python:
+    desc: Reset Python mock repo (remove .git, .codesub)
+    vars:
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repos/python'
+    cmds:
+      - |
+        echo "Resetting Python mock repo..."
         if [ -d "{{.MOCK_DIR}}/.git" ]; then
           mv "{{.MOCK_DIR}}/.git" "{{.MOCK_DIR}}/.git_template"
           echo "  Reverted .git to .git_template"
         fi
         rm -rf "{{.MOCK_DIR}}/.codesub"
         echo "  Removed .codesub"
-        echo "Done. Run 'task mock:init' to set up again."
+        echo "Done."
+
+  mock:reset:java:
+    desc: Reset Java mock repo (remove .git, .codesub)
+    vars:
+      MOCK_DIR: '{{.ROOT_DIR}}/mock_repos/java'
+    cmds:
+      - |
+        echo "Resetting Java mock repo..."
+        if [ -d "{{.MOCK_DIR}}/.git" ]; then
+          mv "{{.MOCK_DIR}}/.git" "{{.MOCK_DIR}}/.git_template"
+          echo "  Reverted .git to .git_template"
+        fi
+        rm -rf "{{.MOCK_DIR}}/.codesub"
+        echo "  Removed .codesub"
+        echo "Done."

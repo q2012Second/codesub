@@ -48,11 +48,15 @@ task mock:init
 | `task format` | Auto-format code |
 | `task format:check` | Check formatting (CI-friendly) |
 
-### Mock Repository
+### Mock Repositories
 | Task | Description |
 |------|-------------|
-| `task mock:init` | Initialize mock_repo with sample subscriptions |
-| `task mock:reset` | Reset mock_repo to clean state |
+| `task mock:init` | Initialize both mock repos (Python + Java) |
+| `task mock:init:python` | Initialize Python mock repo |
+| `task mock:init:java` | Initialize Java mock repo |
+| `task mock:reset` | Reset both mock repos |
+| `task mock:reset:python` | Reset Python mock repo |
+| `task mock:reset:java` | Reset Java mock repo |
 
 ### Codesub Operations
 | Task | Description |
@@ -91,12 +95,18 @@ src/codesub/
 ├── errors.py         # Custom exceptions
 └── semantic/         # Semantic code analysis (Tree-sitter based)
     ├── __init__.py
+    ├── construct.py      # Construct dataclass
     ├── fingerprint.py    # Hash computation (interface_hash, body_hash)
-    └── python_indexer.py # Python construct extraction
+    ├── indexer_protocol.py # SemanticIndexer protocol
+    ├── registry.py       # Language indexer registry
+    ├── python_indexer.py # Python construct extraction
+    └── java_indexer.py   # Java construct extraction
 
 frontend/             # React + TypeScript frontend
-mock_repo/            # Mock repository for testing (run `task mock:init`)
-tests/                # Test suite (pytest, 180+ tests)
+mock_repos/           # Mock repositories for testing
+├── python/           # Python e-commerce API (run `task mock:init:python`)
+└── java/             # Java e-commerce API (run `task mock:init:java`)
+tests/                # Test suite (pytest, 225+ tests)
 data/                 # Local server data (gitignored)
 ├── projects.json     # Registered projects
 └── scan_history/     # Scan results per project
@@ -143,12 +153,21 @@ Semantic subscriptions track code constructs by identity using Tree-sitter parsi
 
 **Target format**: `path/to/file.py::QualifiedName` or `path/to/file.py::kind:QualifiedName`
 
-**Supported constructs** (Python):
+**Supported languages**: Python, Java
+
+**Supported constructs (Python)**:
 - Module variables/constants: `config.py::API_VERSION`
 - Class fields: `models.py::User.email`
 - Methods: `auth.py::User.validate`
 - Enum members: `types.py::Status.PENDING`
 - Dataclass fields: `models.py::Config.timeout`
+
+**Supported constructs (Java)**:
+- Classes/interfaces/enums: `Service.java::OrderService`
+- Fields: `Config.java::AppConfig.API_VERSION`
+- Methods (with param types): `Service.java::OrderService.process(Order,User)`
+- Constructors: `User.java::User.User(String,String)`
+- Enum constants: `Status.java::OrderStatus.PENDING`
 
 **Change detection**:
 - `structural`: Type annotation or signature changed

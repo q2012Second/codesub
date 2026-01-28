@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 f69eae21dd1d7bffbb8f57c343bb3d29d957135c Test User <test@example.com> 1769611635 +0200	commit (initial): Initial commit: Order management API (Java)
+f69eae21dd1d7bffbb8f57c343bb3d29d957135c f69eae21dd1d7bffbb8f57c343bb3d29d957135c Test User <test@example.com> 1769611635 +0200	commit (amend): Initial commit: Order management API (Java)
+f69eae21dd1d7bffbb8f57c343bb3d29d957135c 16da78132597f4e4e65d1853a39f4e3206ba82cd Test User <test@example.com> 1769611742 +0200	commit: Change FREE_SHIPPING_THRESHOLD to 100.00
