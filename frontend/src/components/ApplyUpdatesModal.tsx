@@ -67,37 +67,76 @@ export function ApplyUpdatesModal({
         </p>
 
         <div style={{ marginBottom: 16 }}>
-          {proposals.map(p => (
-            <label
-              key={p.subscription_id}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 8,
-                padding: 8,
-                border: '1px solid #ddd',
-                borderRadius: 4,
-                marginBottom: 4,
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(p.subscription_id)}
-                onChange={() => toggleSelect(p.subscription_id)}
-              />
-              <div>
-                <div style={{ fontWeight: 500 }}>
-                  {p.label || p.subscription_id.slice(0, 8)}
+          {proposals.map((p) => {
+            const hasSemanticRename = p.new_qualname != null;
+            const hasLineChange = p.old_start !== p.new_start || p.old_end !== p.new_end;
+            const hasPathChange = p.old_path !== p.new_path;
+
+            return (
+              <label
+                key={p.subscription_id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  padding: 8,
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  marginBottom: 4,
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(p.subscription_id)}
+                  onChange={() => toggleSelect(p.subscription_id)}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {p.label || p.subscription_id.slice(0, 8)}
+                    {hasSemanticRename && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          padding: '1px 4px',
+                          borderRadius: 3,
+                          background: '#e3f2fd',
+                          color: '#1565c0',
+                          border: '1px solid #90caf9',
+                        }}
+                      >
+                        RENAME
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Line/path changes */}
+                  {(hasLineChange || hasPathChange) && (
+                    <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#666' }}>
+                      {p.old_path}:{p.old_start}-{p.old_end}
+                      {' -> '}
+                      {p.new_path}:{p.new_start}-{p.new_end}
+                    </div>
+                  )}
+
+                  {/* Semantic rename */}
+                  {hasSemanticRename && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                        color: '#1565c0',
+                        marginTop: 2,
+                      }}
+                    >
+                      Rename to: {p.new_qualname}
+                      {p.new_kind && ` (${p.new_kind})`}
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#666' }}>
-                  {p.old_path}:{p.old_start}-{p.old_end}
-                  {' -> '}
-                  {p.new_path}:{p.new_start}-{p.new_end}
-                </div>
-              </div>
-            </label>
-          ))}
+              </label>
+            );
+          })}
         </div>
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

@@ -22,8 +22,8 @@ from .errors import (
     ScanNotFoundError,
 )
 from .git_repo import GitRepo
-from .models import Anchor, Subscription
-from .utils import parse_location, extract_anchors
+from .models import Anchor, Subscription, SemanticTarget
+from .utils import parse_location, extract_anchors, parse_target_spec, LineTarget, SemanticTargetSpec
 from .project_store import ProjectStore
 from .scan_history import ScanHistory
 from .detector import Detector
@@ -40,6 +40,18 @@ class AnchorSchema(BaseModel):
     context_after: list[str]
 
 
+class SemanticTargetSchema(BaseModel):
+    """Schema for semantic subscription target."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add"
+    role: Optional[str] = None  # "const" for constants, None otherwise
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+
 class SubscriptionSchema(BaseModel):
     id: str
     path: str
@@ -48,6 +60,7 @@ class SubscriptionSchema(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     anchors: Optional[AnchorSchema] = None
+    semantic: Optional[SemanticTargetSchema] = None
     active: bool = True
     created_at: str
     updated_at: str
@@ -56,7 +69,11 @@ class SubscriptionSchema(BaseModel):
 class SubscriptionCreateRequest(BaseModel):
     """Request body for creating a subscription."""
 
-    location: str = Field(..., description="path:line or path:start-end format")
+    location: str = Field(
+        ...,
+        description="Location format: 'path:line' or 'path:start-end' for line-based, "
+        "'path::QualName' or 'path::kind:QualName' for semantic",
+    )
     label: Optional[str] = None
     description: Optional[str] = None
     context: int = Field(default=2, ge=0, le=10)
@@ -130,6 +147,7 @@ class TriggerSchema(BaseModel):
     reasons: list[str]
     label: Optional[str]
     change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
+    details: Optional[dict] = None  # Additional details for semantic triggers
 
 
 class ProposalSchema(BaseModel):
@@ -225,6 +243,17 @@ def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
             lines=sub.anchors.lines,
             context_after=sub.anchors.context_after,
         )
+    semantic = None
+    if sub.semantic:
+        semantic = SemanticTargetSchema(
+            language=sub.semantic.language,
+            kind=sub.semantic.kind,
+            qualname=sub.semantic.qualname,
+            role=sub.semantic.role,
+            interface_hash=sub.semantic.interface_hash,
+            body_hash=sub.semantic.body_hash,
+            fingerprint_version=sub.semantic.fingerprint_version,
+        )
     return SubscriptionSchema(
         id=sub.id,
         path=sub.path,
@@ -233,10 +262,98 @@ def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
         label=sub.label,
         description=sub.description,
         anchors=anchors,
+        semantic=semantic,
         active=sub.active,
         created_at=sub.created_at,
         updated_at=sub.updated_at,
     )
+
+
+def _create_subscription_from_request(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    request: SubscriptionCreateRequest,
+) -> Subscription:
+    """Create a subscription from a request, handling both line-based and semantic targets."""
+    from .semantic import PythonIndexer
+
+    target = parse_target_spec(request.location)
+
+    if isinstance(target, SemanticTargetSpec):
+        # Semantic subscription
+        lines = repo.show_file(baseline, target.path)
+        source = "\n".join(lines)
+
+        indexer = PythonIndexer()
+        construct = indexer.find_construct(
+            source, target.path, target.qualname, target.kind
+        )
+        if construct is None:
+            raise InvalidLocationError(
+                request.location,
+                f"Construct '{target.qualname}' not found. Use 'codesub symbols' to discover valid targets.",
+            )
+
+        # Extract anchors from construct lines
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, construct.start_line, construct.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        # Create semantic target
+        semantic = SemanticTarget(
+            language="python",
+            kind=construct.kind,
+            qualname=construct.qualname,
+            role=construct.role,
+            interface_hash=construct.interface_hash,
+            body_hash=construct.body_hash,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=construct.start_line,
+            end_line=construct.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+            semantic=semantic,
+        )
+    else:
+        # Line-based subscription
+        lines = repo.show_file(baseline, target.path)
+
+        # Validate line range
+        if target.end_line > len(lines):
+            raise InvalidLineRangeError(
+                target.start_line,
+                target.end_line,
+                f"exceeds file length ({len(lines)} lines)",
+            )
+
+        # Extract anchors
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, target.start_line, target.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=target.start_line,
+            end_line=target.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+        )
 
 
 # --- FastAPI App ---
@@ -320,43 +437,12 @@ def get_subscription(sub_id: str):
 
 @app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
 def create_subscription(request: SubscriptionCreateRequest):
-    """Create a new subscription."""
+    """Create a new subscription (line-based or semantic)."""
     store, repo = get_store_and_repo()
     config = store.load()
-
-    # Parse and validate location
-    path, start_line, end_line = parse_location(request.location)
-
-    # Validate file exists at baseline
     baseline = config.repo.baseline_ref
-    lines = repo.show_file(baseline, path)
 
-    # Validate line range
-    if end_line > len(lines):
-        raise InvalidLineRangeError(
-            start_line, end_line, f"exceeds file length ({len(lines)} lines)"
-        )
-
-    # Extract anchors
-    context_before, watched_lines, context_after = extract_anchors(
-        lines, start_line, end_line, context=request.context
-    )
-    anchors = Anchor(
-        context_before=context_before,
-        lines=watched_lines,
-        context_after=context_after,
-    )
-
-    # Create subscription
-    sub = Subscription.create(
-        path=path,
-        start_line=start_line,
-        end_line=end_line,
-        label=request.label,
-        description=request.description,
-        anchors=anchors,
-    )
-
+    sub = _create_subscription_from_request(store, repo, baseline, request)
     store.add_subscription(sub)
     return subscription_to_schema(sub)
 
@@ -515,43 +601,12 @@ def list_project_subscriptions(
 
 @app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
 def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
-    """Create a new subscription in a specific project."""
+    """Create a new subscription in a specific project (line-based or semantic)."""
     store, repo = get_project_store_and_repo(project_id)
     config = store.load()
-
-    # Parse and validate location
-    path, start_line, end_line = parse_location(request.location)
-
-    # Validate file exists at baseline
     baseline = config.repo.baseline_ref
-    lines = repo.show_file(baseline, path)
 
-    # Validate line range
-    if end_line > len(lines):
-        raise InvalidLineRangeError(
-            start_line, end_line, f"exceeds file length ({len(lines)} lines)"
-        )
-
-    # Extract anchors
-    context_before, watched_lines, context_after = extract_anchors(
-        lines, start_line, end_line, context=request.context
-    )
-    anchors = Anchor(
-        context_before=context_before,
-        lines=watched_lines,
-        context_after=context_after,
-    )
-
-    # Create subscription
-    sub = Subscription.create(
-        path=path,
-        start_line=start_line,
-        end_line=end_line,
-        label=request.label,
-        description=request.description,
-        anchors=anchors,
-    )
-
+    sub = _create_subscription_from_request(store, repo, baseline, request)
     store.add_subscription(sub)
     return subscription_to_schema(sub)
 

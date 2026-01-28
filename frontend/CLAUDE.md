@@ -45,7 +45,10 @@ src/
     ├── ProjectSelector.tsx    # Header dropdown for switching projects
     ├── ScanView.tsx           # Run scans, view results, apply updates
     ├── ScanHistoryList.tsx    # View past scan results
-    └── ApplyUpdatesModal.tsx  # Confirmation dialog for applying proposals
+    ├── ScanDetailView.tsx     # View details of a specific past scan
+    ├── ApplyUpdatesModal.tsx  # Confirmation dialog for applying proposals
+    ├── TriggerCard.tsx        # Shared trigger display card
+    └── ProposalCard.tsx       # Shared proposal display card
 ```
 
 ## Views
@@ -62,6 +65,7 @@ App.tsx manages these views via `view` state:
 | `edit` | SubscriptionForm | Edit label/description |
 | `scan` | ScanView | Run scans and view results |
 | `scan-history` | ScanHistoryList | View past scan results |
+| `scan-detail` | ScanDetailView | View details of a specific past scan |
 
 ## API Integration
 

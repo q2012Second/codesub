@@ -69,14 +69,30 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
             <input
               type="text"
               value={location}
-              onChange={e => setLocation(e.target.value)}
-              placeholder="path/to/file.py:42 or path/to/file.py:42-50"
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="path/to/file.py:42 or path/to/file.py::ClassName.method"
               required
               style={{ width: '100%', fontFamily: 'monospace' }}
             />
             <small style={{ color: '#666', display: 'block', marginTop: 4 }}>
-              Format: path:line or path:start-end (repo-relative path)
+              <strong>Line-based:</strong> path:line or path:start-end (e.g., config.py:10-25)
+              <br />
+              <strong>Semantic:</strong> path::QualifiedName (e.g., auth.py::User.validate)
             </small>
+            {location.includes('::') && location.split('::')[1]?.trim() && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '8px 12px',
+                  background: '#d1ecf1',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  color: '#0c5460',
+                }}
+              >
+                Detected: <strong>semantic subscription</strong> - will track code construct by identity
+              </div>
+            )}
           </div>
         )}
 
@@ -84,10 +100,26 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
           <div style={{ marginBottom: 20, padding: 16, background: '#f8f9fa', borderRadius: 4 }}>
             <strong>Location:</strong>{' '}
             <code style={{ fontSize: 13 }}>
-              {subscription.path}:{subscription.start_line === subscription.end_line
-                ? subscription.start_line
-                : `${subscription.start_line}-${subscription.end_line}`}
+              {subscription.semantic
+                ? `${subscription.path}::${subscription.semantic.qualname}`
+                : subscription.start_line === subscription.end_line
+                  ? `${subscription.path}:${subscription.start_line}`
+                  : `${subscription.path}:${subscription.start_line}-${subscription.end_line}`}
             </code>
+            {subscription.semantic && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  padding: '2px 6px',
+                  borderRadius: 3,
+                  fontSize: 11,
+                  background: '#d1ecf1',
+                  color: '#0c5460',
+                }}
+              >
+                {subscription.semantic.kind}
+              </span>
+            )}
           </div>
         )}
 

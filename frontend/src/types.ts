@@ -4,6 +4,29 @@ export interface Anchor {
   context_after: string[];
 }
 
+export interface SemanticTarget {
+  language: string; // "python"
+  kind: string; // "variable" | "field" | "method"
+  qualname: string; // "API_VERSION" | "User.role" | "Calculator.add"
+  role?: string | null; // "const" for constants, null otherwise
+  interface_hash?: string;
+  body_hash?: string;
+  fingerprint_version?: number;
+}
+
+// Defensive union type accepting both cases (backend uses UPPERCASE, but be tolerant)
+export type ChangeType =
+  | 'STRUCTURAL'
+  | 'CONTENT'
+  | 'MISSING'
+  | 'AMBIGUOUS'
+  | 'PARSE_ERROR'
+  | 'structural'
+  | 'content'
+  | 'missing'
+  | 'ambiguous'
+  | 'parse_error';
+
 export interface Subscription {
   id: string;
   path: string;
@@ -12,6 +35,7 @@ export interface Subscription {
   label: string | null;
   description: string | null;
   anchors: Anchor | null;
+  semantic?: SemanticTarget | null; // null/undefined for line-based subscriptions
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -89,6 +113,8 @@ export interface Trigger {
   end_line: number;
   reasons: string[];
   label: string | null;
+  change_type?: ChangeType | null; // semantic change classification
+  details?: unknown; // Additional semantic details (string, object, or null)
 }
 
 export interface Proposal {
@@ -103,6 +129,8 @@ export interface Proposal {
   confidence: string;
   shift: number | null;
   label: string | null;
+  new_qualname?: string | null; // For semantic renames
+  new_kind?: string | null; // For semantic kind changes
 }
 
 export interface ScanResult {

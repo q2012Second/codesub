@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Subscription, FilterStatus, View, Project, ScanHistoryEntry } from './types';
 import {
   listProjects,
@@ -15,11 +15,33 @@ import { ProjectForm } from './components/ProjectForm';
 import { ProjectSelector } from './components/ProjectSelector';
 import { ScanView } from './components/ScanView';
 import { ScanHistoryList } from './components/ScanHistoryList';
+import { ScanDetailView } from './components/ScanDetailView';
+
+// Navigation state stored in browser history
+interface NavState {
+  view: View;
+  projectId: string | null;
+  subscriptionId: string | null;
+  scanId: string | null;
+}
+
+function getInitialNavState(): NavState {
+  // Try to restore from history state on page load
+  const historyState = window.history.state as NavState | null;
+  if (historyState?.view) {
+    return historyState;
+  }
+  return {
+    view: 'projects',
+    projectId: null,
+    subscriptionId: null,
+    scanId: null,
+  };
+}
 
 export default function App() {
   // Project state
   const [projects, setProjects] = useState<Project[]>([]);
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [projectLoading, setProjectLoading] = useState(true);
 
   // Subscription state
@@ -30,15 +52,62 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterStatus>('active');
 
-  // View state
-  const [view, setView] = useState<View>('projects');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Navigation state (synced with browser history)
+  const [navState, setNavState] = useState<NavState>(getInitialNavState);
+  const isNavigatingRef = useRef(false);
 
   // Scan history state
   const [scanHistory, setScanHistory] = useState<ScanHistoryEntry[]>([]);
 
   // Messages
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Derived values from navState
+  const view = navState.view;
+  const currentProjectId = navState.projectId;
+  const selectedId = navState.subscriptionId;
+  const selectedScanId = navState.scanId;
+
+  // Navigate to a new state (pushes to history)
+  const navigate = useCallback((newState: Partial<NavState>) => {
+    const fullState: NavState = {
+      view: newState.view ?? navState.view,
+      projectId: newState.projectId !== undefined ? newState.projectId : navState.projectId,
+      subscriptionId: newState.subscriptionId !== undefined ? newState.subscriptionId : navState.subscriptionId,
+      scanId: newState.scanId !== undefined ? newState.scanId : navState.scanId,
+    };
+
+    isNavigatingRef.current = true;
+    window.history.pushState(fullState, '', window.location.pathname);
+    setNavState(fullState);
+  }, [navState]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state as NavState | null;
+      if (state) {
+        setNavState(state);
+      } else {
+        // No state means we're at the initial entry
+        setNavState({
+          view: 'projects',
+          projectId: null,
+          subscriptionId: null,
+          scanId: null,
+        });
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    // Replace initial state so back button works from first navigation
+    if (!window.history.state) {
+      window.history.replaceState(navState, '', window.location.pathname);
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Load projects on mount
   useEffect(() => {
@@ -97,56 +166,42 @@ export default function App() {
     setTimeout(() => setMessage(null), 4000);
   };
 
-  // Project handlers
-  const handleSelectProject = async (projectId: string) => {
-    setCurrentProjectId(projectId);
-    setView('list');
+  // Navigation handlers
+  const handleSelectProject = (projectId: string) => {
+    navigate({ view: 'list', projectId, subscriptionId: null, scanId: null });
   };
 
   const handleProjectSaved = (project: Project) => {
     loadProjects();
-    setCurrentProjectId(project.id);
-    setView('list');
+    navigate({ view: 'list', projectId: project.id, subscriptionId: null, scanId: null });
     showMessage('success', 'Project added');
   };
 
-  // Subscription handlers
   const handleSelect = (id: string) => {
-    setSelectedId(id);
-    setView('detail');
+    navigate({ view: 'detail', subscriptionId: id });
   };
 
   const handleBack = () => {
-    if (view === 'scan' || view === 'scan-history') {
-      setView('list');
-    } else if (view === 'list') {
-      setView('projects');
-      setCurrentProjectId(null);
-    } else {
-      setView('list');
-      setSelectedId(null);
-    }
+    window.history.back();
   };
 
   const handleEdit = (id: string) => {
-    setSelectedId(id);
-    setView('edit');
+    navigate({ view: 'edit', subscriptionId: id });
   };
 
   const handleCreate = () => {
-    setView('create');
+    navigate({ view: 'create' });
   };
 
   const handleSaved = (sub: Subscription, isNew: boolean) => {
     fetchSubscriptions();
-    setView('detail');
-    setSelectedId(sub.id);
+    navigate({ view: 'detail', subscriptionId: sub.id });
     showMessage('success', isNew ? 'Subscription created' : 'Subscription updated');
   };
 
   const handleDeleted = () => {
     fetchSubscriptions();
-    handleBack();
+    navigate({ view: 'list', subscriptionId: null });
     showMessage('success', 'Subscription deleted');
   };
 
@@ -179,8 +234,7 @@ export default function App() {
                 if (id) {
                   handleSelectProject(id);
                 } else {
-                  setCurrentProjectId(null);
-                  setView('projects');
+                  navigate({ view: 'projects', projectId: null, subscriptionId: null, scanId: null });
                 }
               }}
             />
@@ -212,7 +266,7 @@ export default function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
             <h2>Projects</h2>
             <button
-              onClick={() => setView('project-add')}
+              onClick={() => navigate({ view: 'project-add' })}
               style={{ background: '#0066cc', color: 'white', border: '1px solid #0066cc', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' }}
             >
               + Add Project
@@ -224,7 +278,7 @@ export default function App() {
             <ProjectList
               projects={projects}
               onSelect={handleSelectProject}
-              onAddProject={() => setView('project-add')}
+              onAddProject={() => navigate({ view: 'project-add' })}
             />
           )}
         </>
@@ -232,7 +286,7 @@ export default function App() {
 
       {view === 'project-add' && (
         <ProjectForm
-          onCancel={() => setView('projects')}
+          onCancel={handleBack}
           onSaved={handleProjectSaved}
           showMessage={showMessage}
         />
@@ -247,7 +301,7 @@ export default function App() {
               <StatusFilter value={filter} onChange={setFilter} />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => setView('scan')} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>
+              <button onClick={() => navigate({ view: 'scan' })} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>
                 Run Scan
               </button>
               <button
@@ -294,7 +348,7 @@ export default function App() {
         <SubscriptionForm
           subscription={view === 'edit' ? selectedSub : null}
           projectId={currentProjectId}
-          onCancel={view === 'edit' && selectedSub ? () => setView('detail') : handleBack}
+          onCancel={handleBack}
           onSaved={handleSaved}
           showMessage={showMessage}
         />
@@ -308,7 +362,7 @@ export default function App() {
           onBack={handleBack}
           onViewHistory={() => {
             loadScanHistory();
-            setView('scan-history');
+            navigate({ view: 'scan-history' });
           }}
           showMessage={showMessage}
           onBaselineUpdated={fetchSubscriptions}
@@ -320,11 +374,21 @@ export default function App() {
         <ScanHistoryList
           scans={scanHistory}
           onSelect={(id) => {
-            // Could navigate to scan-detail view
-            console.log('Selected scan:', id);
+            navigate({ view: 'scan-detail', scanId: id });
           }}
           onClear={handleClearHistory}
-          onBack={() => setView('scan')}
+          onBack={handleBack}
+        />
+      )}
+
+      {/* Scan Detail */}
+      {view === 'scan-detail' && currentProjectId && selectedScanId && (
+        <ScanDetailView
+          projectId={currentProjectId}
+          scanId={selectedScanId}
+          onBack={handleBack}
+          showMessage={showMessage}
+          onBaselineUpdated={fetchSubscriptions}
         />
       )}
     </div>
