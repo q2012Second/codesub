@@ -1,5 +1,6 @@
 """FastAPI REST API for codesub subscription management."""
 
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -202,6 +203,21 @@ class ApplyUpdatesResponse(BaseModel):
     applied: list[str]
     warnings: list[str]
     new_baseline: Optional[str]
+
+
+# --- Filesystem Browser Schemas ---
+
+
+class FilesystemEntry(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+
+
+class FilesystemBrowseResponse(BaseModel):
+    current_path: str
+    parent_path: Optional[str]
+    entries: list[FilesystemEntry]
 
 
 # --- Helper Functions ---
@@ -811,4 +827,83 @@ def apply_project_updates(project_id: str, request: ApplyUpdatesRequest):
         applied=applied,
         warnings=warnings,
         new_baseline=scan_result.get("target_ref") if applied else None,
+    )
+
+
+# --- Filesystem Browser Endpoint ---
+
+
+@app.get("/api/filesystem/browse", response_model=FilesystemBrowseResponse)
+def browse_filesystem(path: str = Query(default="~", description="Path to browse")):
+    """
+    Browse filesystem directories.
+
+    Used by the frontend to provide a file picker for selecting project paths.
+    Returns directories (not files) sorted alphabetically, with hidden dirs excluded.
+    Restricted to user's home directory for security.
+    """
+    home = Path.home().resolve()
+
+    # Expand ~ and resolve path
+    try:
+        expanded = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}")
+
+    # Security: restrict to home directory
+    try:
+        expanded.relative_to(home)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access restricted to home directory ({home})"
+        )
+
+    if not expanded.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    if not expanded.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+    # Get parent path (None if at home directory)
+    if expanded == home:
+        parent_path = None
+    else:
+        parent = expanded.parent
+        # Ensure parent is still within home
+        try:
+            parent.relative_to(home)
+            parent_path = str(parent)
+        except ValueError:
+            parent_path = None
+
+    # List directory entries (directories only, exclude hidden)
+    entries: list[FilesystemEntry] = []
+    try:
+        for item in sorted(expanded.iterdir(), key=lambda p: p.name.lower()):
+            try:
+                # Skip hidden directories
+                if item.name.startswith("."):
+                    continue
+                # Skip symlinks to avoid escaping home directory
+                if item.is_symlink():
+                    continue
+                if item.is_dir():
+                    entries.append(
+                        FilesystemEntry(
+                            name=item.name,
+                            path=str(item),
+                            is_dir=True,
+                        )
+                    )
+            except OSError:
+                # Skip entries that can't be inspected (broken symlinks, etc.)
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+
+    return FilesystemBrowseResponse(
+        current_path=str(expanded),
+        parent_path=parent_path,
+        entries=entries,
     )

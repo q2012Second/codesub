@@ -14,6 +14,7 @@ import type {
   ScanRequest,
   ApplyUpdatesRequest,
   ApplyUpdatesResponse,
+  FilesystemBrowseResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -219,4 +220,12 @@ export async function applyUpdates(
     body: JSON.stringify(request),
   });
   return handleResponse<ApplyUpdatesResponse>(response);
+}
+
+// --- Filesystem Browser API ---
+
+export async function browseFilesystem(path: string = '~'): Promise<FilesystemBrowseResponse> {
+  const url = `${API_BASE}/filesystem/browse?path=${encodeURIComponent(path)}`;
+  const response = await fetch(url);
+  return handleResponse<FilesystemBrowseResponse>(response);
 }

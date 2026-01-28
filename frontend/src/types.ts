@@ -175,3 +175,16 @@ export interface ApplyUpdatesResponse {
   warnings: string[];
   new_baseline: string | null;
 }
+
+// Filesystem browser types
+export interface FilesystemEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface FilesystemBrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  entries: FilesystemEntry[];
+}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createProject } from '../api';
 import type { Project } from '../types';
+import { FileBrowserModal } from './FileBrowserModal';
 
 interface ProjectFormProps {
   onCancel: () => void;
@@ -12,6 +13,7 @@ export function ProjectForm({ onCancel, onSaved, showMessage }: ProjectFormProps
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,14 +45,30 @@ export function ProjectForm({ onCancel, onSaved, showMessage }: ProjectFormProps
         <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>
           Repository Path *
         </label>
-        <input
-          type="text"
-          value={path}
-          onChange={e => setPath(e.target.value)}
-          placeholder="~/projects/my-repo or ./relative/path"
-          style={{ width: '100%', padding: 8, fontFamily: 'monospace', border: '1px solid #ddd', borderRadius: 4 }}
-          autoFocus
-        />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={path}
+            onChange={e => setPath(e.target.value)}
+            placeholder="~/projects/my-repo or ./relative/path"
+            style={{ flex: 1, padding: 8, fontFamily: 'monospace', border: '1px solid #ddd', borderRadius: 4 }}
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => setShowBrowser(true)}
+            style={{
+              padding: '8px 12px',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              cursor: 'pointer',
+              background: '#f5f5f5',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Browse...
+          </button>
+        </div>
         <small style={{ color: '#666' }}>
           Absolute, relative, or ~/path to a git repo with codesub initialized
         </small>
@@ -81,6 +99,17 @@ export function ProjectForm({ onCancel, onSaved, showMessage }: ProjectFormProps
           {loading ? 'Adding...' : 'Add Project'}
         </button>
       </div>
+
+      {showBrowser && (
+        <FileBrowserModal
+          initialPath={path || '~'}
+          onSelect={(selectedPath) => {
+            setPath(selectedPath);
+            setShowBrowser(false);
+          }}
+          onCancel={() => setShowBrowser(false)}
+        />
+      )}
     </form>
   );
 }
