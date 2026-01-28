@@ -703,7 +703,7 @@ tasks:
     desc: Initialize Python mock repo (e-commerce order API)
     summary: |
       Sets up the Python mock repository for testing codesub:
-      1. Initializes git (renames .git_template to .git)
+      1. Initializes git (copies .git_template to .git)
       2. Registers the project with codesub
       3. Creates subscriptions demonstrating real-world use cases
 
@@ -713,13 +713,13 @@ tasks:
       MOCK_DIR: '{{.ROOT_DIR}}/mock_repos/python'
     cmds:
       - |
-        # Step 1: Initialize git repo
-        if [ -d "{{.MOCK_DIR}}/.git_template" ]; then
-          echo "Initializing Python mock repo git..."
-          mv "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
-          echo "  Git initialized"
-        elif [ -d "{{.MOCK_DIR}}/.git" ]; then
+        # Step 1: Initialize git repo (copy template, don't move)
+        if [ -d "{{.MOCK_DIR}}/.git" ]; then
           echo "  Git already initialized"
+        elif [ -d "{{.MOCK_DIR}}/.git_template" ]; then
+          echo "Initializing Python mock repo git..."
+          cp -r "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
+          echo "  Git initialized"
         else
           echo "Error: No .git or .git_template found in mock_repos/python"
           exit 1
@@ -784,7 +784,7 @@ tasks:
     desc: Initialize Java mock repo (e-commerce order API)
     summary: |
       Sets up the Java mock repository for testing codesub:
-      1. Initializes git (renames .git_template to .git)
+      1. Initializes git (copies .git_template to .git)
       2. Registers the project with codesub
       3. Creates subscriptions demonstrating Java semantic tracking
 
@@ -795,13 +795,13 @@ tasks:
       SRC_PREFIX: 'src/main/java/com/example/orderapi'
     cmds:
       - |
-        # Step 1: Initialize git repo
-        if [ -d "{{.MOCK_DIR}}/.git_template" ]; then
-          echo "Initializing Java mock repo git..."
-          mv "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
-          echo "  Git initialized"
-        elif [ -d "{{.MOCK_DIR}}/.git" ]; then
+        # Step 1: Initialize git repo (copy template, don't move)
+        if [ -d "{{.MOCK_DIR}}/.git" ]; then
           echo "  Git already initialized"
+        elif [ -d "{{.MOCK_DIR}}/.git_template" ]; then
+          echo "Initializing Java mock repo git..."
+          cp -r "{{.MOCK_DIR}}/.git_template" "{{.MOCK_DIR}}/.git"
+          echo "  Git initialized"
         else
           echo "Error: No .git or .git_template found in mock_repos/java"
           exit 1
@@ -875,10 +875,8 @@ tasks:
     cmds:
       - |
         echo "Resetting Python mock repo..."
-        if [ -d "{{.MOCK_DIR}}/.git" ]; then
-          mv "{{.MOCK_DIR}}/.git" "{{.MOCK_DIR}}/.git_template"
-          echo "  Reverted .git to .git_template"
-        fi
+        rm -rf "{{.MOCK_DIR}}/.git"
+        echo "  Removed .git"
         rm -rf "{{.MOCK_DIR}}/.codesub"
         echo "  Removed .codesub"
         echo "Done."
@@ -890,10 +888,8 @@ tasks:
     cmds:
       - |
         echo "Resetting Java mock repo..."
-        if [ -d "{{.MOCK_DIR}}/.git" ]; then
-          mv "{{.MOCK_DIR}}/.git" "{{.MOCK_DIR}}/.git_template"
-          echo "  Reverted .git to .git_template"
-        fi
+        rm -rf "{{.MOCK_DIR}}/.git"
+        echo "  Removed .git"
         rm -rf "{{.MOCK_DIR}}/.codesub"
         echo "  Removed .codesub"
         echo "Done."
