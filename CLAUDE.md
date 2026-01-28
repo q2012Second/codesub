@@ -64,6 +64,7 @@ task mock:init
 | `task codesub:init TARGET=path` | Initialize codesub in target project |
 | `task codesub:add TARGET=path -- file:10-20` | Add subscription |
 | `task codesub:list TARGET=path` | List subscriptions |
+| `task codesub:clean` | Remove all projects, subscriptions, and history |
 | `task codesub:scan TARGET=path` | Scan for changes |
 | `task codesub:scan:ci TARGET=path` | Scan with CI exit codes |
 | `task codesub:apply TARGET=path` | Apply update proposals |

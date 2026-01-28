@@ -373,6 +373,54 @@ tasks:
     cmds:
       - '{{.CODESUB}} remove {{.CLI_ARGS}}'
 
+  codesub:clean:
+    desc: "Remove all projects, subscriptions, and scan history"
+    summary: |
+      Comprehensive cleanup of all codesub data:
+      - All registered projects
+      - All scan history
+      - Server data directory (data/)
+
+      Usage:
+        task codesub:clean
+    cmds:
+      - |
+        echo "Cleaning all codesub data..."
+        echo ""
+
+        # 1. Clear all scan history
+        echo "Clearing scan history..."
+        {{.CODESUB}} scan-history clear 2>/dev/null || echo "  No scan history to clear"
+
+        # 2. Remove all registered projects
+        echo "Removing registered projects..."
+        ids=$({{.CODESUB}} projects list --json 2>/dev/null | {{.PYTHON}} -c "
+        import json, sys
+        try:
+            data = json.load(sys.stdin)
+            for proj in data:
+                print(proj['id'])
+        except:
+            pass
+        ")
+        if [ -z "$ids" ]; then
+          echo "  No projects to remove"
+        else
+          count=0
+          for id in $ids; do
+            {{.CODESUB}} projects remove "$id" >/dev/null 2>&1 && count=$((count + 1))
+          done
+          echo "  Removed $count project(s)"
+        fi
+
+        # 3. Clean data directory
+        echo "Cleaning data directory..."
+        rm -rf "{{.ROOT_DIR}}/data/projects.json" 2>/dev/null && echo "  Removed projects.json" || true
+        rm -rf "{{.ROOT_DIR}}/data/scan_history" 2>/dev/null && echo "  Removed scan_history/" || true
+
+        echo ""
+        echo "Done. All codesub data cleaned."
+
   # =============================================================================
   # CODESUB OPERATIONS - Scanning & Detection
   # =============================================================================
