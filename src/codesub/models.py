@@ -89,6 +89,7 @@ class Subscription:
     anchors: Anchor | None = None
     semantic: SemanticTarget | None = None
     active: bool = True
+    trigger_on_duplicate: bool = False  # Trigger if construct found in multiple files
     created_at: str = field(default_factory=_utc_now)
     updated_at: str = field(default_factory=_utc_now)
 
@@ -99,6 +100,7 @@ class Subscription:
             "start_line": self.start_line,
             "end_line": self.end_line,
             "active": self.active,
+            "trigger_on_duplicate": self.trigger_on_duplicate,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -130,6 +132,7 @@ class Subscription:
             anchors=anchors,
             semantic=semantic,
             active=data.get("active", True),
+            trigger_on_duplicate=data.get("trigger_on_duplicate", False),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
         )
@@ -144,6 +147,7 @@ class Subscription:
         description: str | None = None,
         anchors: Anchor | None = None,
         semantic: "SemanticTarget | None" = None,
+        trigger_on_duplicate: bool = False,
     ) -> "Subscription":
         """Create a new subscription with generated ID and timestamps."""
         now = _utc_now()
@@ -157,6 +161,7 @@ class Subscription:
             anchors=anchors,
             semantic=semantic,
             active=True,
+            trigger_on_duplicate=trigger_on_duplicate,
             created_at=now,
             updated_at=now,
         )
@@ -256,7 +261,9 @@ class Trigger:
     path: str
     start_line: int
     end_line: int
-    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range"]
+    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range",
+    #                           "semantic_target_missing", "duplicate_found",
+    #                           "interface_changed", "body_changed"]
     matching_hunks: list[Hunk]
     change_type: str | None = None  # "STRUCTURAL"|"CONTENT"|"MISSING"|"AMBIGUOUS"|"PARSE_ERROR"
     details: dict[str, Any] | None = None
@@ -274,8 +281,8 @@ class Proposal:
     new_path: str
     new_start: int
     new_end: int
-    reasons: list[str]  # ["rename", "line_shift", "semantic_location"]
-    confidence: str = "high"  # "high" for POC (math-based)
+    reasons: list[str]  # ["rename", "line_shift", "semantic_location", "moved_cross_file"]
+    confidence: str = "high"  # "high"|"medium"|"low" based on match tier
     shift: int | None = None
     new_qualname: str | None = None  # For semantic subscriptions when construct renamed
     new_kind: str | None = None  # For semantic subscriptions if kind changed

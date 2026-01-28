@@ -186,6 +186,7 @@ def _add_semantic_subscription(
         description=args.desc,
         anchors=anchors,
         semantic=semantic,
+        trigger_on_duplicate=getattr(args, 'trigger_on_duplicate', False),
     )
 
     store.add_subscription(sub)
@@ -605,6 +606,11 @@ def create_parser() -> argparse.ArgumentParser:
     add_parser.add_argument(
         "--context", "-c", type=int, default=2,
         help="Number of context lines for anchors (default: 2)"
+    )
+    add_parser.add_argument(
+        "--trigger-on-duplicate",
+        action="store_true",
+        help="Trigger alert if construct is found in multiple files (default: no trigger)"
     )
 
     # list

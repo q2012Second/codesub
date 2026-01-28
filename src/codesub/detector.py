@@ -66,11 +66,16 @@ class Detector:
         proposals: list[Proposal] = []
         unchanged: list[Subscription] = []
 
+        # Cache for indexed constructs: (path, language) -> list[Construct]
+        # Avoids re-parsing the same file for multiple subscriptions
+        construct_cache: dict[tuple[str, str], list] = {}
+
         for sub in active_subs:
             # Check if semantic subscription
             if sub.semantic is not None:
                 trigger, proposal = self._check_semantic(
-                    sub, base_ref, target_ref, rename_map, status_map
+                    sub, base_ref, target_ref, rename_map, status_map,
+                    file_diffs, construct_cache
                 )
                 if trigger:
                     triggers.append(trigger)
@@ -285,6 +290,89 @@ class Detector:
 
         return shift
 
+    def _search_cross_file(
+        self,
+        semantic: SemanticTarget,
+        old_path: str,
+        new_path: str,
+        target_ref: str | None,
+        file_diffs: list[FileDiff],
+        status_map: dict[str, str],
+        construct_cache: dict[tuple[str, str], list],
+    ) -> tuple[list[tuple[str, "Construct"]], str]:
+        """Search for construct in other files from the diff.
+
+        Args:
+            semantic: The semantic target to search for.
+            old_path: Original subscription path to skip.
+            new_path: Renamed path to skip (may be same as old_path).
+            target_ref: Target ref for reading files.
+            file_diffs: List of file diffs to search.
+            status_map: Path to status mapping.
+            construct_cache: Cache of indexed constructs per file.
+
+        Returns:
+            Tuple of (matches, best_match_tier).
+            matches is list of (file_path, Construct) tuples.
+            best_match_tier is "exact" | "body" | "interface" | "none".
+        """
+        from .errors import UnsupportedLanguageError
+        from .semantic import detect_language, get_indexer
+
+        target_language = semantic.language
+        all_matches: list[tuple[str, "Construct"]] = []
+        best_tier = "none"
+        tier_priority = {"exact": 0, "body": 1, "interface": 2, "none": 3}
+        skip_paths = {old_path, new_path}
+
+        for fd in file_diffs:
+            candidate_path = fd.new_path
+
+            # Skip original file (both old and new paths)
+            if candidate_path in skip_paths or fd.old_path in skip_paths:
+                continue
+
+            # Skip deleted files
+            if fd.is_deleted_file or status_map.get(fd.old_path) == "D":
+                continue
+
+            # Check language compatibility
+            try:
+                candidate_language = detect_language(candidate_path)
+                if candidate_language != target_language:
+                    continue
+            except UnsupportedLanguageError:
+                continue
+
+            # Check cache first
+            cache_key = (candidate_path, target_language)
+            if cache_key in construct_cache:
+                constructs = construct_cache[cache_key]
+            else:
+                # Get file content
+                try:
+                    if target_ref:
+                        source = "\n".join(self.repo.show_file(target_ref, candidate_path))
+                    else:
+                        with open(self.repo.root / candidate_path, encoding="utf-8") as f:
+                            source = f.read()
+                except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
+                    continue
+
+                # Index the file and cache
+                indexer = get_indexer(target_language)
+                constructs = indexer.index_file(source, candidate_path)
+                construct_cache[cache_key] = constructs
+
+            # Find matches using candidates API
+            matches, tier = self._find_hash_candidates(semantic, constructs)
+            for match in matches:
+                all_matches.append((candidate_path, match))
+                if tier_priority[tier] < tier_priority[best_tier]:
+                    best_tier = tier
+
+        return all_matches, best_tier
+
     def _check_semantic(
         self,
         sub: Subscription,
@@ -292,8 +380,16 @@ class Detector:
         target_ref: str | None,
         rename_map: dict[str, str],
         status_map: dict[str, str],
+        file_diffs: list[FileDiff],
+        construct_cache: dict[tuple[str, str], list],
     ) -> tuple[Trigger | None, Proposal | None]:
-        """Check semantic subscription for changes."""
+        """Check semantic subscription for changes.
+
+        Uses a 3-stage detection strategy:
+        - Stage 1: Exact qualname match in same/renamed file
+        - Stage 2: Hash-based search in same/renamed file
+        - Stage 3: Cross-file hash search in other files from the diff
+        """
         from .errors import UnsupportedLanguageError
         from .semantic import get_indexer
 
@@ -318,67 +414,75 @@ class Detector:
                 None,
             )
 
-        # Resolve file rename
         old_path = sub.path
         new_path = rename_map.get(old_path, old_path)
 
-        # Check if file deleted
-        if status_map.get(old_path) == "D":
-            return (
-                Trigger(
-                    subscription_id=sub.id,
-                    subscription=sub,
-                    path=old_path,
-                    start_line=sub.start_line,
-                    end_line=sub.end_line,
-                    reasons=["file_deleted"],
-                    matching_hunks=[],
-                    change_type="MISSING",
-                ),
-                None,
+        # Track why we might fail, for final error message
+        file_deleted = status_map.get(old_path) == "D"
+        file_read_failed = False
+        new_source: str | None = None
+
+        # Try to get new file content (may fail if deleted or unreadable)
+        if not file_deleted:
+            try:
+                if target_ref:
+                    new_source = "\n".join(self.repo.show_file(target_ref, new_path))
+                else:
+                    with open(self.repo.root / new_path, encoding="utf-8") as f:
+                        new_source = f.read()
+            except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
+                file_read_failed = True
+
+        # Stage 1 & 2: Only if we have new_source
+        if new_source is not None:
+            # Stage 1: Exact match by qualname
+            new_construct = indexer.find_construct(
+                new_source, new_path, sub.semantic.qualname, sub.semantic.kind
             )
 
-        # Get old file content
-        old_source = "\n".join(self.repo.show_file(base_ref, old_path))
+            if new_construct:
+                # Found by exact qualname - check for changes
+                trigger = self._classify_semantic_change(sub, new_construct)
+                proposal = None
 
-        # Get new file content
-        try:
-            if target_ref:
-                new_source = "\n".join(self.repo.show_file(target_ref, new_path))
-            else:
-                # Working directory
-                with open(self.repo.root / new_path, encoding="utf-8") as f:
-                    new_source = f.read()
-        except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
-            return (
-                Trigger(
-                    subscription_id=sub.id,
-                    subscription=sub,
-                    path=old_path,
-                    start_line=sub.start_line,
-                    end_line=sub.end_line,
-                    reasons=["file_not_found"],
-                    matching_hunks=[],
-                    change_type="MISSING",
-                ),
-                None,
-            )
+                if old_path != new_path:
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["rename"],
+                        confidence="high",
+                    )
+                elif (
+                    new_construct.start_line != sub.start_line
+                    or new_construct.end_line != sub.end_line
+                ):
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["line_shift"],
+                        confidence="high",
+                    )
 
-        # Stage 1: Exact match by qualname
-        old_construct = indexer.find_construct(
-            old_source, old_path, sub.semantic.qualname, sub.semantic.kind
-        )
-        new_construct = indexer.find_construct(
-            new_source, new_path, sub.semantic.qualname, sub.semantic.kind
-        )
+                return trigger, proposal
 
-        if new_construct:
-            # Found by exact qualname - check for changes
-            trigger = self._classify_semantic_change(sub, old_construct, new_construct)
-            proposal = None
+            # Stage 2: Hash-based search in same file
+            new_constructs = indexer.index_file(new_source, new_path)
+            match = self._find_by_hash(sub.semantic, new_constructs)
 
-            # Check if path changed (file renamed)
-            if old_path != new_path:
+            if match:
+                trigger = self._classify_semantic_change(sub, match)
                 proposal = Proposal(
                     subscription_id=sub.id,
                     subscription=sub,
@@ -386,54 +490,74 @@ class Detector:
                     old_start=sub.start_line,
                     old_end=sub.end_line,
                     new_path=new_path,
-                    new_start=new_construct.start_line,
-                    new_end=new_construct.end_line,
-                    reasons=["rename"],
+                    new_start=match.start_line,
+                    new_end=match.end_line,
+                    reasons=["semantic_location"],
                     confidence="high",
+                    new_qualname=match.qualname,
+                    new_kind=match.kind,
                 )
-            elif (
-                new_construct.start_line != sub.start_line
-                or new_construct.end_line != sub.end_line
-            ):
-                proposal = Proposal(
-                    subscription_id=sub.id,
-                    subscription=sub,
-                    old_path=old_path,
-                    old_start=sub.start_line,
-                    old_end=sub.end_line,
-                    new_path=new_path,
-                    new_start=new_construct.start_line,
-                    new_end=new_construct.end_line,
-                    reasons=["line_shift"],
-                    confidence="high",
-                )
+                return trigger, proposal
 
-            return trigger, proposal
+        # Stage 3: Cross-file search (always attempted, even if file deleted)
+        cross_matches, match_tier = self._search_cross_file(
+            sub.semantic, old_path, new_path, target_ref, file_diffs,
+            status_map, construct_cache
+        )
 
-        # Stage 2: Hash-based search
-        new_constructs = indexer.index_file(new_source, new_path)
-        match = self._find_by_hash(sub.semantic, new_constructs)
+        if len(cross_matches) == 1:
+            # Found in exactly one other file
+            found_path, found_construct = cross_matches[0]
+            trigger = self._classify_semantic_change(sub, found_construct)
 
-        if match:
-            # Found by hash - it was renamed/moved
-            trigger = self._classify_semantic_change(sub, old_construct, match)
+            # Set confidence based on match tier
+            confidence = "high" if match_tier == "exact" else "medium" if match_tier == "body" else "low"
+
             proposal = Proposal(
                 subscription_id=sub.id,
                 subscription=sub,
                 old_path=old_path,
                 old_start=sub.start_line,
                 old_end=sub.end_line,
-                new_path=new_path,
-                new_start=match.start_line,
-                new_end=match.end_line,
-                reasons=["semantic_location"],
-                confidence="high",
-                new_qualname=match.qualname,
-                new_kind=match.kind,
+                new_path=found_path,
+                new_start=found_construct.start_line,
+                new_end=found_construct.end_line,
+                reasons=["moved_cross_file"],
+                confidence=confidence,
+                new_qualname=found_construct.qualname if found_construct.qualname != sub.semantic.qualname else None,
+                new_kind=found_construct.kind if found_construct.kind != sub.semantic.kind else None,
             )
             return trigger, proposal
 
-        # Not found at all
+        if len(cross_matches) > 1:
+            # Found in multiple files (duplicate/ambiguous)
+            if sub.trigger_on_duplicate:
+                locations = [f"{path}:{c.start_line}" for path, c in cross_matches]
+                return (
+                    Trigger(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        path=old_path,
+                        start_line=sub.start_line,
+                        end_line=sub.end_line,
+                        reasons=["duplicate_found"],
+                        matching_hunks=[],
+                        change_type="AMBIGUOUS",
+                        details={"locations": locations},
+                    ),
+                    None,
+                )
+            # Default: duplicates are ambiguous, treat as unchanged (no trigger, no proposal)
+            return (None, None)
+
+        # Not found anywhere - determine the appropriate missing reason
+        if file_deleted:
+            reason = "file_deleted"
+        elif file_read_failed:
+            reason = "file_not_found"
+        else:
+            reason = "semantic_target_missing"
+
         return (
             Trigger(
                 subscription_id=sub.id,
@@ -441,7 +565,7 @@ class Detector:
                 path=old_path,
                 start_line=sub.start_line,
                 end_line=sub.end_line,
-                reasons=["semantic_target_missing"],
+                reasons=[reason],
                 matching_hunks=[],
                 change_type="MISSING",
             ),
@@ -451,17 +575,17 @@ class Detector:
     def _classify_semantic_change(
         self,
         sub: Subscription,
-        old_construct: "Construct | None",
         new_construct: "Construct",
     ) -> Trigger | None:
-        """Classify change type between old and new construct."""
-        if old_construct is None or sub.semantic is None:
+        """Classify change type between subscription fingerprints and new construct.
+
+        Compares stored fingerprints in sub.semantic against new_construct.
+        """
+        if sub.semantic is None:
             return None
 
-        old_fp = sub.semantic
-
         # Check interface change (type/signature)
-        if old_fp.interface_hash != new_construct.interface_hash:
+        if sub.semantic.interface_hash != new_construct.interface_hash:
             return Trigger(
                 subscription_id=sub.id,
                 subscription=sub,
@@ -474,7 +598,7 @@ class Detector:
             )
 
         # Check body change (value/implementation)
-        if old_fp.body_hash != new_construct.body_hash:
+        if sub.semantic.body_hash != new_construct.body_hash:
             return Trigger(
                 subscription_id=sub.id,
                 subscription=sub,
@@ -525,3 +649,53 @@ class Detector:
             return matches[0]
 
         return None
+
+    def _find_hash_candidates(
+        self,
+        semantic: SemanticTarget,
+        constructs: "list[Construct]",
+    ) -> tuple[list["Construct"], str]:
+        """Find all constructs matching by hash, with match tier.
+
+        Unlike _find_by_hash which returns a single result or None,
+        this returns ALL matching constructs, enabling detection of
+        ambiguous matches (duplicates).
+
+        Args:
+            semantic: The semantic target with fingerprints.
+            constructs: List of constructs to search.
+
+        Returns:
+            Tuple of (matching_constructs, match_tier).
+            match_tier is "exact" | "body" | "interface" | "none".
+        """
+        # Try exact match (both hashes)
+        exact_matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash
+            and c.body_hash == semantic.body_hash
+            and c.kind == semantic.kind
+        ]
+        if exact_matches:
+            return exact_matches, "exact"
+
+        # Try body-only match (renamed + signature changed)
+        body_matches = [
+            c
+            for c in constructs
+            if c.body_hash == semantic.body_hash and c.kind == semantic.kind
+        ]
+        if body_matches:
+            return body_matches, "body"
+
+        # Try interface-only match (renamed + body changed)
+        interface_matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash and c.kind == semantic.kind
+        ]
+        if interface_matches:
+            return interface_matches, "interface"
+
+        return [], "none"

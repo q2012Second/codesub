@@ -64,6 +64,7 @@ class SubscriptionSchema(BaseModel):
     anchors: Optional[AnchorSchema] = None
     semantic: Optional[SemanticTargetSchema] = None
     active: bool = True
+    trigger_on_duplicate: bool = False
     created_at: str
     updated_at: str
 
@@ -79,6 +80,10 @@ class SubscriptionCreateRequest(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     context: int = Field(default=2, ge=0, le=10)
+    trigger_on_duplicate: bool = Field(
+        default=False,
+        description="For semantic subscriptions: trigger alert if construct found in multiple files"
+    )
 
 
 class SubscriptionUpdateRequest(BaseModel):
@@ -86,6 +91,7 @@ class SubscriptionUpdateRequest(BaseModel):
 
     label: Optional[str] = None
     description: Optional[str] = None
+    trigger_on_duplicate: Optional[bool] = None
 
 
 class SubscriptionListResponse(BaseModel):
@@ -281,6 +287,7 @@ def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
         anchors=anchors,
         semantic=semantic,
         active=sub.active,
+        trigger_on_duplicate=sub.trigger_on_duplicate,
         created_at=sub.created_at,
         updated_at=sub.updated_at,
     )
@@ -340,6 +347,7 @@ def _create_subscription_from_request(
             description=request.description,
             anchors=anchors,
             semantic=semantic,
+            trigger_on_duplicate=request.trigger_on_duplicate,
         )
     else:
         # Line-based subscription
@@ -487,6 +495,8 @@ def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
     if "description" in update_data:
         # Empty string becomes None
         sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
 
     store.update_subscription(sub)
     return subscription_to_schema(sub)
@@ -649,6 +659,8 @@ def update_project_subscription(project_id: str, sub_id: str, request: Subscript
         sub.label = request.label if request.label else None
     if "description" in update_data:
         sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
 
     store.update_subscription(sub)
     return subscription_to_schema(sub)
