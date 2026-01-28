@@ -1,0 +1,3 @@
+0000000000000000000000000000000000000000 fd11efd57eda267865d07f010c8fcd80a0499d4f Vladyslav <vladyslav@dentina.ai> 1769605265 +0200	commit (initial): Initial commit: Order management API
+fd11efd57eda267865d07f010c8fcd80a0499d4f 9f56f2525344e25e5048942ef4ac85949c61cf27 Vladyslav <vladyslav@dentina.ai> 1769605290 +0200	commit: Update README with realistic subscription examples
+9f56f2525344e25e5048942ef4ac85949c61cf27 08e3180edfc5a6f70e62caea9d8138049e994fdf Vladyslav <vladyslav@dentina.ai> 1769606043 +0200	commit: Expand README with code examples and usage guide
