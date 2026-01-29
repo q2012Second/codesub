@@ -1,0 +1,3505 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: frontend/src/types.ts, frontend/src/api.ts, frontend/src/components/SubscriptionList.tsx, frontend/src/components/SubscriptionDetail.tsx, frontend/src/components/SubscriptionForm.tsx, frontend/src/components/ScanView.tsx, frontend/src/components/ApplyUpdatesModal.tsx, frontend/src/components/ScanHistoryList.tsx, frontend/src/App.tsx, src/codesub/models.py, src/codesub/api.py, src/codesub/detector.py, src/codesub/update_doc.py, tasks/semantic-subscriptions/frontend-todo.md
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+frontend/
+  src/
+    components/
+      ApplyUpdatesModal.tsx
+      ScanHistoryList.tsx
+      ScanView.tsx
+      SubscriptionDetail.tsx
+      SubscriptionForm.tsx
+      SubscriptionList.tsx
+    api.ts
+    App.tsx
+    types.ts
+src/
+  codesub/
+    api.py
+    detector.py
+    models.py
+    update_doc.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="frontend/src/components/ApplyUpdatesModal.tsx">
+import { useState } from 'react';
+import type { Proposal } from '../types';
+
+interface ApplyUpdatesModalProps {
+  proposals: Proposal[];
+  onConfirm: (proposalIds?: string[]) => void;
+  onCancel: () => void;
+}
+
+export function ApplyUpdatesModal({
+  proposals,
+  onConfirm,
+  onCancel,
+}: ApplyUpdatesModalProps) {
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(proposals.map(p => p.subscription_id))
+  );
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelected(next);
+  };
+
+  const handleConfirm = () => {
+    if (selected.size === proposals.length) {
+      onConfirm(); // Apply all
+    } else {
+      onConfirm(Array.from(selected));
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        style={{
+          background: 'white',
+          borderRadius: 8,
+          padding: 24,
+          maxWidth: 500,
+          width: '90%',
+          maxHeight: '80vh',
+          overflow: 'auto',
+        }}
+      >
+        <h3 style={{ marginBottom: 16 }}>Apply Updates</h3>
+        <p style={{ marginBottom: 16, color: '#666' }}>
+          This will update the selected subscriptions and advance the baseline.
+          This action cannot be undone.
+        </p>
+
+        <div style={{ marginBottom: 16 }}>
+          {proposals.map(p => (
+            <label
+              key={p.subscription_id}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                padding: 8,
+                border: '1px solid #ddd',
+                borderRadius: 4,
+                marginBottom: 4,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(p.subscription_id)}
+                onChange={() => toggleSelect(p.subscription_id)}
+              />
+              <div>
+                <div style={{ fontWeight: 500 }}>
+                  {p.label || p.subscription_id.slice(0, 8)}
+                </div>
+                <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#666' }}>
+                  {p.old_path}:{p.old_start}-{p.old_end}
+                  {' -> '}
+                  {p.new_path}:{p.new_start}-{p.new_end}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>Cancel</button>
+          <button
+            onClick={handleConfirm}
+            disabled={selected.size === 0}
+            style={{
+              background: '#28a745',
+              color: 'white',
+              border: '1px solid #28a745',
+              padding: '8px 16px',
+              borderRadius: 4,
+              cursor: 'pointer',
+            }}
+          >
+            Apply {selected.size} Update(s)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/ScanHistoryList.tsx">
+import type { ScanHistoryEntry } from '../types';
+
+interface ScanHistoryListProps {
+  scans: ScanHistoryEntry[];
+  onSelect: (scanId: string) => void;
+  onClear: () => void;
+  onBack: () => void;
+}
+
+export function ScanHistoryList({
+  scans,
+  onSelect,
+  onClear,
+  onBack,
+}: ScanHistoryListProps) {
+  const formatDate = (iso: string) => {
+    return new Date(iso).toLocaleString();
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+        <button onClick={onBack} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>Back</button>
+        <button
+          onClick={onClear}
+          disabled={scans.length === 0}
+          style={{ color: '#dc3545', padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}
+        >
+          Clear History
+        </button>
+      </div>
+
+      <h2 style={{ marginBottom: 16 }}>Scan History</h2>
+
+      {scans.length === 0 ? (
+        <p style={{ color: '#666' }}>No scan history yet.</p>
+      ) : (
+        <div>
+          {scans.map(scan => (
+            <div
+              key={scan.id}
+              onClick={() => onSelect(scan.id)}
+              style={{
+                padding: 12,
+                border: '1px solid #ddd',
+                borderRadius: 4,
+                marginBottom: 8,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f9f9f9')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                  {scan.base_ref.slice(0, 8)}...{scan.target_ref.slice(0, 8)}
+                </span>
+                <span style={{ fontSize: 12, color: '#666' }}>
+                  {formatDate(scan.created_at)}
+                </span>
+              </div>
+              <div style={{ fontSize: 13, marginTop: 4, display: 'flex', gap: 16 }}>
+                {scan.trigger_count > 0 && (
+                  <span style={{ color: '#dc3545' }}>
+                    {scan.trigger_count} triggered
+                  </span>
+                )}
+                {scan.proposal_count > 0 && (
+                  <span style={{ color: '#856404' }}>
+                    {scan.proposal_count} proposals
+                  </span>
+                )}
+                {scan.trigger_count === 0 && scan.proposal_count === 0 && (
+                  <span style={{ color: '#666' }}>No changes</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/ScanView.tsx">
+import { useState } from 'react';
+import { runScan, getScanResult, applyUpdates } from '../api';
+import type { ScanHistoryEntryFull, Trigger, Proposal } from '../types';
+import { ApplyUpdatesModal } from './ApplyUpdatesModal';
+
+const REASON_LABELS: Record<string, string> = {
+  overlap_hunk: 'Lines in range were modified',
+  insert_inside_range: 'New lines inserted inside range',
+  file_deleted: 'File was deleted',
+  line_shift: 'Lines shifted due to changes above',
+  rename: 'File was renamed or moved',
+};
+
+function formatReasons(reasons: string[]): string {
+  return reasons.map(r => REASON_LABELS[r] || r).join('; ');
+}
+
+interface ScanViewProps {
+  projectId: string;
+  baselineRef: string;
+  onBack: () => void;
+  onViewHistory: () => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+  onBaselineUpdated: () => void;
+}
+
+export function ScanView({
+  projectId,
+  baselineRef,
+  onBack,
+  onViewHistory,
+  showMessage,
+  onBaselineUpdated,
+}: ScanViewProps) {
+  const [baseRef, setBaseRef] = useState(baselineRef);
+  const [targetRef, setTargetRef] = useState('HEAD');
+  const [loading, setLoading] = useState(false);
+  const [scanResult, setScanResult] = useState<ScanHistoryEntryFull | null>(null);
+  const [showApplyModal, setShowApplyModal] = useState(false);
+
+  const handleScan = async () => {
+    try {
+      setLoading(true);
+      const entry = await runScan(projectId, { base_ref: baseRef, target_ref: targetRef });
+      const full = await getScanResult(projectId, entry.id);
+      setScanResult(full);
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleQuickScan = async (base: string, target: string, label: string) => {
+    setBaseRef(base);
+    setTargetRef(target);
+    try {
+      setLoading(true);
+      const entry = await runScan(projectId, { base_ref: base, target_ref: target });
+      const full = await getScanResult(projectId, entry.id);
+      setScanResult(full);
+      showMessage('success', `${label} scan complete`);
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Scan failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApplyUpdates = async (proposalIds?: string[]) => {
+    if (!scanResult) return;
+
+    try {
+      const result = await applyUpdates(projectId, {
+        scan_id: scanResult.id,
+        proposal_ids: proposalIds,
+      });
+
+      if (result.warnings.length > 0) {
+        showMessage('error', `Warnings: ${result.warnings.join(', ')}`);
+      }
+
+      if (result.applied.length > 0) {
+        showMessage('success', `Applied ${result.applied.length} update(s)`);
+        onBaselineUpdated();
+        setScanResult(null);
+      }
+
+      setShowApplyModal(false);
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Failed to apply updates');
+    }
+  };
+
+  const result = scanResult?.scan_result;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+        <button onClick={onBack} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>Back</button>
+        <button onClick={onViewHistory} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>View History</button>
+      </div>
+
+      <h2 style={{ marginBottom: 16 }}>Run Scan</h2>
+
+      {/* Quick Actions */}
+      <div style={{ marginBottom: 20, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => handleQuickScan('HEAD', '', 'Uncommitted')}
+          disabled={loading}
+          style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}
+        >
+          Scan Uncommitted
+        </button>
+        <button
+          onClick={() => handleQuickScan('HEAD~1', 'HEAD', 'Last commit')}
+          disabled={loading}
+          style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}
+        >
+          Scan Last Commit
+        </button>
+        <button
+          onClick={() => handleQuickScan(baselineRef, 'HEAD', 'Since baseline')}
+          disabled={loading}
+          style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}
+        >
+          Scan Since Baseline
+        </button>
+      </div>
+
+      {/* Custom Scan Form */}
+      <div style={{ marginBottom: 20, padding: 16, background: '#f5f5f5', borderRadius: 4 }}>
+        <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+              Base Ref
+            </label>
+            <input
+              type="text"
+              value={baseRef}
+              onChange={e => setBaseRef(e.target.value)}
+              style={{ width: '100%', padding: 6, fontFamily: 'monospace', border: '1px solid #ddd', borderRadius: 4 }}
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
+              Target Ref
+            </label>
+            <input
+              type="text"
+              value={targetRef}
+              onChange={e => setTargetRef(e.target.value)}
+              style={{ width: '100%', padding: 6, fontFamily: 'monospace', border: '1px solid #ddd', borderRadius: 4 }}
+            />
+          </div>
+        </div>
+        <button
+          onClick={handleScan}
+          disabled={loading || !baseRef}
+          style={{ background: '#0066cc', color: 'white', border: '1px solid #0066cc', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' }}
+        >
+          {loading ? 'Scanning...' : 'Run Scan'}
+        </button>
+      </div>
+
+      {/* Scan Results */}
+      {result && (
+        <div>
+          <h3 style={{ marginBottom: 12 }}>
+            Results: {scanResult.base_ref.slice(0, 8)}...{scanResult.target_ref.slice(0, 8)}
+          </h3>
+
+          {/* Triggers */}
+          {result.triggers.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h4 style={{ color: '#dc3545', marginBottom: 8 }}>
+                Triggered ({result.triggers.length})
+              </h4>
+              {result.triggers.map((t: Trigger) => (
+                <div
+                  key={t.subscription_id}
+                  style={{
+                    padding: 12,
+                    border: '1px solid #f5c6cb',
+                    background: '#f8d7da',
+                    borderRadius: 4,
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{ fontWeight: 500 }}>
+                    {t.label || t.subscription_id.slice(0, 8)}
+                  </div>
+                  <div style={{ fontSize: 13, fontFamily: 'monospace' }}>
+                    {t.path}:{t.start_line}-{t.end_line}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                    {formatReasons(t.reasons)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Proposals */}
+          {result.proposals.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h4 style={{ color: '#856404', marginBottom: 8 }}>
+                Proposed Updates ({result.proposals.length})
+              </h4>
+              {result.proposals.map((p: Proposal) => (
+                <div
+                  key={p.subscription_id}
+                  style={{
+                    padding: 12,
+                    border: '1px solid #ffeeba',
+                    background: '#fff3cd',
+                    borderRadius: 4,
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{ fontWeight: 500 }}>
+                    {p.label || p.subscription_id.slice(0, 8)}
+                  </div>
+                  <div style={{ fontSize: 13, fontFamily: 'monospace' }}>
+                    {p.old_path}:{p.old_start}-{p.old_end}
+                    {' -> '}
+                    {p.new_path}:{p.new_start}-{p.new_end}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                    {formatReasons(p.reasons)}
+                    {p.shift !== null && ` (${p.shift > 0 ? '+' : ''}${p.shift} lines)`}
+                  </div>
+                </div>
+              ))}
+
+              <button
+                onClick={() => setShowApplyModal(true)}
+                style={{
+                  marginTop: 8,
+                  background: '#28a745',
+                  color: 'white',
+                  border: '1px solid #28a745',
+                  padding: '8px 16px',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                }}
+              >
+                Apply Updates
+              </button>
+            </div>
+          )}
+
+          {result.triggers.length === 0 && result.proposals.length === 0 && (
+            <p style={{ color: '#666' }}>No changes detected for subscriptions.</p>
+          )}
+        </div>
+      )}
+
+      {showApplyModal && scanResult && (
+        <ApplyUpdatesModal
+          proposals={scanResult.scan_result.proposals}
+          onConfirm={handleApplyUpdates}
+          onCancel={() => setShowApplyModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionList.tsx">
+import type { Subscription } from '../types';
+
+interface Props {
+  subscriptions: Subscription[];
+  onSelect: (id: string) => void;
+}
+
+export function SubscriptionList({ subscriptions, onSelect }: Props) {
+  if (subscriptions.length === 0) {
+    return <p style={{ color: '#666', padding: '20px 0' }}>No subscriptions found.</p>;
+  }
+
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
+          <th style={{ padding: '12px 8px' }}>ID</th>
+          <th style={{ padding: '12px 8px' }}>Location</th>
+          <th style={{ padding: '12px 8px' }}>Label</th>
+          <th style={{ padding: '12px 8px' }}>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {subscriptions.map((sub) => (
+          <tr
+            key={sub.id}
+            onClick={() => onSelect(sub.id)}
+            style={{
+              cursor: 'pointer',
+              borderBottom: '1px solid #eee',
+              opacity: sub.active ? 1 : 0.6,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f9f9f9')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <td style={{ padding: '12px 8px', fontFamily: 'monospace', fontSize: 13 }}>
+              {sub.id.slice(0, 8)}
+            </td>
+            <td style={{ padding: '12px 8px', fontFamily: 'monospace', fontSize: 13 }}>
+              {sub.path}:{sub.start_line === sub.end_line
+                ? sub.start_line
+                : `${sub.start_line}-${sub.end_line}`}
+            </td>
+            <td style={{ padding: '12px 8px' }}>{sub.label || <span style={{ color: '#999' }}>-</span>}</td>
+            <td style={{ padding: '12px 8px' }}>
+              <span style={{
+                padding: '2px 8px',
+                borderRadius: 4,
+                fontSize: 12,
+                background: sub.active ? '#d4edda' : '#e9ecef',
+                color: sub.active ? '#155724' : '#6c757d',
+              }}>
+                {sub.active ? 'active' : 'inactive'}
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+</file>
+
+<file path="frontend/src/types.ts">
+export interface Anchor {
+  context_before: string[];
+  lines: string[];
+  context_after: string[];
+}
+
+export interface Subscription {
+  id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  label: string | null;
+  description: string | null;
+  anchors: Anchor | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionListResponse {
+  subscriptions: Subscription[];
+  count: number;
+  baseline_ref: string;
+  baseline_title: string;
+}
+
+export interface SubscriptionCreateRequest {
+  location: string;
+  label?: string;
+  description?: string;
+  context?: number;
+}
+
+export interface SubscriptionUpdateRequest {
+  label?: string;
+  description?: string;
+}
+
+export interface ApiError {
+  detail: string;
+  error_type?: string;
+}
+
+export type FilterStatus = 'active' | 'all';
+
+export type View =
+  | 'projects'
+  | 'project-add'
+  | 'list'
+  | 'detail'
+  | 'create'
+  | 'edit'
+  | 'scan'
+  | 'scan-history'
+  | 'scan-detail';
+
+// Project types
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectStatus {
+  project: Project;
+  path_exists: boolean;
+  codesub_initialized: boolean;
+  subscription_count: number;
+  baseline_ref: string | null;
+}
+
+export interface ProjectCreateRequest {
+  path: string;
+  name?: string;
+}
+
+export interface ProjectListResponse {
+  projects: Project[];
+  count: number;
+}
+
+// Scan types
+export interface Trigger {
+  subscription_id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  reasons: string[];
+  label: string | null;
+}
+
+export interface Proposal {
+  subscription_id: string;
+  old_path: string;
+  old_start: number;
+  old_end: number;
+  new_path: string;
+  new_start: number;
+  new_end: number;
+  reasons: string[];
+  confidence: string;
+  shift: number | null;
+  label: string | null;
+}
+
+export interface ScanResult {
+  base_ref: string;
+  target_ref: string;
+  triggers: Trigger[];
+  proposals: Proposal[];
+}
+
+export interface ScanHistoryEntry {
+  id: string;
+  project_id: string;
+  base_ref: string;
+  target_ref: string;
+  trigger_count: number;
+  proposal_count: number;
+  unchanged_count: number;
+  created_at: string;
+}
+
+export interface ScanHistoryEntryFull extends ScanHistoryEntry {
+  scan_result: ScanResult;
+}
+
+export interface ScanRequest {
+  base_ref: string;
+  target_ref?: string;  // Empty/undefined for working directory
+}
+
+export interface ScanHistoryListResponse {
+  scans: ScanHistoryEntry[];
+  count: number;
+}
+
+export interface ApplyUpdatesRequest {
+  scan_id: string;
+  proposal_ids?: string[];
+}
+
+export interface ApplyUpdatesResponse {
+  applied: string[];
+  warnings: string[];
+  new_baseline: string | null;
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionDetail.tsx">
+import { useState } from 'react';
+import type { Subscription } from '../types';
+import { deleteProjectSubscription, reactivateProjectSubscription } from '../api';
+
+interface Props {
+  subscription: Subscription;
+  projectId: string;
+  onBack: () => void;
+  onEdit: () => void;
+  onDeleted: () => void;
+  onReactivated: () => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+}
+
+export function SubscriptionDetail({ subscription: sub, projectId, onBack, onEdit, onDeleted, onReactivated, showMessage }: Props) {
+  const [deleting, setDeleting] = useState(false);
+  const [confirmHardDelete, setConfirmHardDelete] = useState(false);
+
+  const location = sub.start_line === sub.end_line
+    ? `${sub.path}:${sub.start_line}`
+    : `${sub.path}:${sub.start_line}-${sub.end_line}`;
+
+  const handleDelete = async (hard: boolean) => {
+    if (hard && !confirmHardDelete) {
+      setConfirmHardDelete(true);
+      return;
+    }
+    try {
+      setDeleting(true);
+      await deleteProjectSubscription(projectId, sub.id, hard);
+      onDeleted();
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Failed to delete');
+      setDeleting(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    try {
+      await reactivateProjectSubscription(projectId, sub.id);
+      onReactivated();
+      showMessage('success', 'Subscription reactivated');
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Failed to reactivate');
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ marginBottom: 16 }}>&larr; Back to list</button>
+
+      <div style={{ background: '#f8f9fa', padding: 20, borderRadius: 6, marginBottom: 20 }}>
+        <h2 style={{ marginBottom: 20, fontSize: 18 }}>Subscription Details</h2>
+
+        <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '12px 20px' }}>
+          <dt style={{ fontWeight: 600, color: '#555' }}>ID:</dt>
+          <dd style={{ fontFamily: 'monospace', fontSize: 13 }}>{sub.id}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Location:</dt>
+          <dd style={{ fontFamily: 'monospace', fontSize: 13 }}>{location}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Label:</dt>
+          <dd>{sub.label || <span style={{ color: '#999' }}>-</span>}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Description:</dt>
+          <dd>{sub.description || <span style={{ color: '#999' }}>-</span>}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Status:</dt>
+          <dd>
+            <span style={{
+              padding: '2px 8px',
+              borderRadius: 4,
+              fontSize: 12,
+              background: sub.active ? '#d4edda' : '#e9ecef',
+              color: sub.active ? '#155724' : '#6c757d',
+            }}>
+              {sub.active ? 'Active' : 'Inactive'}
+            </span>
+          </dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Lines watched:</dt>
+          <dd>{sub.end_line - sub.start_line + 1}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Created:</dt>
+          <dd>{new Date(sub.created_at).toLocaleString()}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Updated:</dt>
+          <dd>{new Date(sub.updated_at).toLocaleString()}</dd>
+        </dl>
+
+        {sub.anchors && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{ marginBottom: 12, fontSize: 14, fontWeight: 600 }}>Watched Lines:</h3>
+            <pre style={{
+              background: '#fff',
+              padding: 16,
+              borderRadius: 4,
+              overflow: 'auto',
+              fontSize: 13,
+              lineHeight: 1.6,
+              border: '1px solid #e9ecef',
+            }}>
+              {sub.anchors.context_before.map((line, i) => (
+                <div key={`before-${i}`} style={{ color: '#6c757d' }}>{line || ' '}</div>
+              ))}
+              {sub.anchors.lines.map((line, i) => (
+                <div key={`line-${i}`} style={{ background: '#fff3cd', margin: '0 -16px', padding: '0 16px' }}>{line || ' '}</div>
+              ))}
+              {sub.anchors.context_after.map((line, i) => (
+                <div key={`after-${i}`} style={{ color: '#6c757d' }}>{line || ' '}</div>
+              ))}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={onEdit}>Edit</button>
+
+        {!sub.active && (
+          <button onClick={handleReactivate} style={{ background: '#d4edda', borderColor: '#c3e6cb' }}>
+            Reactivate
+          </button>
+        )}
+
+        {sub.active && (
+          <button onClick={() => handleDelete(false)} disabled={deleting}>
+            Deactivate
+          </button>
+        )}
+
+        {confirmHardDelete ? (
+          <>
+            <button
+              onClick={() => handleDelete(true)}
+              disabled={deleting}
+              style={{ background: '#dc3545', color: 'white', borderColor: '#dc3545' }}
+            >
+              Confirm Delete Forever
+            </button>
+            <button onClick={() => setConfirmHardDelete(false)}>Cancel</button>
+          </>
+        ) : (
+          <button
+            onClick={() => handleDelete(true)}
+            disabled={deleting}
+            style={{ color: '#dc3545', borderColor: '#dc3545' }}
+          >
+            Delete Forever
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionForm.tsx">
+import { useState } from 'react';
+import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest } from '../types';
+import { createProjectSubscription, updateProjectSubscription } from '../api';
+
+interface Props {
+  subscription: Subscription | null;  // null = create mode
+  projectId: string;
+  onCancel: () => void;
+  onSaved: (sub: Subscription, isNew: boolean) => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+}
+
+export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, showMessage }: Props) {
+  const isEdit = subscription !== null;
+
+  const [location, setLocation] = useState('');
+  const [label, setLabel] = useState(subscription?.label || '');
+  const [description, setDescription] = useState(subscription?.description || '');
+  const [context, setContext] = useState(2);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+
+    try {
+      let result: Subscription;
+
+      if (isEdit && subscription) {
+        const data: SubscriptionUpdateRequest = {
+          label: label || undefined,
+          description: description || undefined,
+        };
+        result = await updateProjectSubscription(projectId, subscription.id, data);
+      } else {
+        const data: SubscriptionCreateRequest = {
+          location,
+          label: label || undefined,
+          description: description || undefined,
+          context,
+        };
+        result = await createProjectSubscription(projectId, data);
+      }
+
+      onSaved(result, !isEdit);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save';
+      setError(msg);
+      showMessage('error', msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <h2 style={{ marginBottom: 20, fontSize: 18 }}>
+        {isEdit ? 'Edit Subscription' : 'Create Subscription'}
+      </h2>
+
+      <form onSubmit={handleSubmit} style={{ maxWidth: 500 }}>
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Location <span style={{ color: '#dc3545' }}>*</span>
+            </label>
+            <input
+              type="text"
+              value={location}
+              onChange={e => setLocation(e.target.value)}
+              placeholder="path/to/file.py:42 or path/to/file.py:42-50"
+              required
+              style={{ width: '100%', fontFamily: 'monospace' }}
+            />
+            <small style={{ color: '#666', display: 'block', marginTop: 4 }}>
+              Format: path:line or path:start-end (repo-relative path)
+            </small>
+          </div>
+        )}
+
+        {isEdit && subscription && (
+          <div style={{ marginBottom: 20, padding: 16, background: '#f8f9fa', borderRadius: 4 }}>
+            <strong>Location:</strong>{' '}
+            <code style={{ fontSize: 13 }}>
+              {subscription.path}:{subscription.start_line === subscription.end_line
+                ? subscription.start_line
+                : `${subscription.start_line}-${subscription.end_line}`}
+            </code>
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Label
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            placeholder="Optional label"
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Description
+          </label>
+          <textarea
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Optional description"
+            rows={3}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+        </div>
+
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Context lines
+            </label>
+            <input
+              type="number"
+              value={context}
+              onChange={e => setContext(parseInt(e.target.value) || 0)}
+              min={0}
+              max={10}
+              style={{ width: 80 }}
+            />
+            <small style={{ color: '#666', marginLeft: 8 }}>
+              Lines before/after for anchors (0-10)
+            </small>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ marginBottom: 20, padding: 12, background: '#f8d7da', color: '#721c24', borderRadius: 4 }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="submit" disabled={saving} style={{ background: '#0066cc', color: 'white', borderColor: '#0066cc' }}>
+            {saving ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create')}
+          </button>
+          <button type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/api.ts">
+import type {
+  Subscription,
+  SubscriptionListResponse,
+  SubscriptionCreateRequest,
+  SubscriptionUpdateRequest,
+  ApiError,
+  Project,
+  ProjectStatus,
+  ProjectCreateRequest,
+  ProjectListResponse,
+  ScanHistoryEntry,
+  ScanHistoryEntryFull,
+  ScanHistoryListResponse,
+  ScanRequest,
+  ApplyUpdatesRequest,
+  ApplyUpdatesResponse,
+} from './types';
+
+const API_BASE = '/api';
+
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const error: ApiError = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function listSubscriptions(includeInactive: boolean = false): Promise<SubscriptionListResponse> {
+  const url = `${API_BASE}/subscriptions?include_inactive=${includeInactive}`;
+  const response = await fetch(url);
+  return handleResponse<SubscriptionListResponse>(response);
+}
+
+export async function getSubscription(id: string): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}`);
+  return handleResponse<Subscription>(response);
+}
+
+export async function createSubscription(data: SubscriptionCreateRequest): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function createProjectSubscription(
+  projectId: string,
+  data: SubscriptionCreateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function updateSubscription(id: string, data: SubscriptionUpdateRequest): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function updateProjectSubscription(
+  projectId: string,
+  id: string,
+  data: SubscriptionUpdateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function deleteSubscription(id: string, hard: boolean = false): Promise<Subscription> {
+  const url = `${API_BASE}/subscriptions/${id}?hard=${hard}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  return handleResponse<Subscription>(response);
+}
+
+export async function deleteProjectSubscription(
+  projectId: string,
+  id: string,
+  hard: boolean = false
+): Promise<Subscription> {
+  const url = `${API_BASE}/projects/${projectId}/subscriptions/${id}?hard=${hard}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  return handleResponse<Subscription>(response);
+}
+
+export async function reactivateSubscription(id: string): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}/reactivate`, {
+    method: 'POST',
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function reactivateProjectSubscription(
+  projectId: string,
+  id: string
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}/reactivate`, {
+    method: 'POST',
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function healthCheck(): Promise<{ status: string; config_initialized: boolean; baseline_ref?: string }> {
+  const response = await fetch(`${API_BASE}/health`);
+  return response.json();
+}
+
+// --- Project API ---
+
+export async function listProjects(): Promise<ProjectListResponse> {
+  const response = await fetch(`${API_BASE}/projects`);
+  return handleResponse<ProjectListResponse>(response);
+}
+
+export async function getProjectStatus(projectId: string): Promise<ProjectStatus> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`);
+  return handleResponse<ProjectStatus>(response);
+}
+
+export async function createProject(data: ProjectCreateRequest): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Project>(response);
+}
+
+export async function deleteProject(projectId: string): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<Project>(response);
+}
+
+// --- Project Subscriptions ---
+
+export async function listProjectSubscriptions(
+  projectId: string,
+  includeInactive: boolean = false
+): Promise<SubscriptionListResponse> {
+  const url = `${API_BASE}/projects/${projectId}/subscriptions?include_inactive=${includeInactive}`;
+  const response = await fetch(url);
+  return handleResponse<SubscriptionListResponse>(response);
+}
+
+// --- Scan API ---
+
+export async function runScan(
+  projectId: string,
+  request: ScanRequest
+): Promise<ScanHistoryEntry> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<ScanHistoryEntry>(response);
+}
+
+export async function listScanHistory(
+  projectId: string,
+  limit: number = 50
+): Promise<ScanHistoryListResponse> {
+  const url = `${API_BASE}/projects/${projectId}/scan-history?limit=${limit}`;
+  const response = await fetch(url);
+  return handleResponse<ScanHistoryListResponse>(response);
+}
+
+export async function getScanResult(
+  projectId: string,
+  scanId: string
+): Promise<ScanHistoryEntryFull> {
+  const response = await fetch(
+    `${API_BASE}/projects/${projectId}/scan-history/${scanId}`
+  );
+  return handleResponse<ScanHistoryEntryFull>(response);
+}
+
+export async function clearProjectScanHistory(
+  projectId: string
+): Promise<{ deleted: number }> {
+  const response = await fetch(
+    `${API_BASE}/projects/${projectId}/scan-history`,
+    { method: 'DELETE' }
+  );
+  return handleResponse<{ deleted: number }>(response);
+}
+
+export async function clearAllScanHistory(): Promise<{ deleted: number }> {
+  const response = await fetch(`${API_BASE}/scan-history`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ deleted: number }>(response);
+}
+
+// --- Apply Updates ---
+
+export async function applyUpdates(
+  projectId: string,
+  request: ApplyUpdatesRequest
+): Promise<ApplyUpdatesResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/apply-updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<ApplyUpdatesResponse>(response);
+}
+</file>
+
+<file path="frontend/src/App.tsx">
+import { useState, useEffect, useCallback } from 'react';
+import type { Subscription, FilterStatus, View, Project, ScanHistoryEntry } from './types';
+import {
+  listProjects,
+  listProjectSubscriptions,
+  listScanHistory,
+  clearProjectScanHistory,
+} from './api';
+import { StatusFilter } from './components/StatusFilter';
+import { SubscriptionList } from './components/SubscriptionList';
+import { SubscriptionDetail } from './components/SubscriptionDetail';
+import { SubscriptionForm } from './components/SubscriptionForm';
+import { ProjectList } from './components/ProjectList';
+import { ProjectForm } from './components/ProjectForm';
+import { ProjectSelector } from './components/ProjectSelector';
+import { ScanView } from './components/ScanView';
+import { ScanHistoryList } from './components/ScanHistoryList';
+
+export default function App() {
+  // Project state
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [projectLoading, setProjectLoading] = useState(true);
+
+  // Subscription state
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [baselineRef, setBaselineRef] = useState<string>('');
+  const [baselineTitle, setBaselineTitle] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterStatus>('active');
+
+  // View state
+  const [view, setView] = useState<View>('projects');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Scan history state
+  const [scanHistory, setScanHistory] = useState<ScanHistoryEntry[]>([]);
+
+  // Messages
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Load projects on mount
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  const loadProjects = async () => {
+    try {
+      setProjectLoading(true);
+      const data = await listProjects();
+      setProjects(data.projects);
+    } catch (e) {
+      showMessage('error', 'Failed to load projects');
+    } finally {
+      setProjectLoading(false);
+    }
+  };
+
+  // Load subscriptions when project changes
+  const fetchSubscriptions = useCallback(async () => {
+    if (!currentProjectId) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await listProjectSubscriptions(currentProjectId, filter === 'all');
+      setSubscriptions(data.subscriptions);
+      setBaselineRef(data.baseline_ref);
+      setBaselineTitle(data.baseline_title || '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load subscriptions');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentProjectId, filter]);
+
+  useEffect(() => {
+    if (currentProjectId) {
+      fetchSubscriptions();
+    }
+  }, [currentProjectId, filter, fetchSubscriptions]);
+
+  const loadScanHistory = async () => {
+    if (!currentProjectId) return;
+
+    try {
+      const data = await listScanHistory(currentProjectId);
+      setScanHistory(data.scans);
+    } catch (e) {
+      showMessage('error', 'Failed to load scan history');
+    }
+  };
+
+  const showMessage = (type: 'success' | 'error', text: string) => {
+    setMessage({ type, text });
+    setTimeout(() => setMessage(null), 4000);
+  };
+
+  // Project handlers
+  const handleSelectProject = async (projectId: string) => {
+    setCurrentProjectId(projectId);
+    setView('list');
+  };
+
+  const handleProjectSaved = (project: Project) => {
+    loadProjects();
+    setCurrentProjectId(project.id);
+    setView('list');
+    showMessage('success', 'Project added');
+  };
+
+  // Subscription handlers
+  const handleSelect = (id: string) => {
+    setSelectedId(id);
+    setView('detail');
+  };
+
+  const handleBack = () => {
+    if (view === 'scan' || view === 'scan-history') {
+      setView('list');
+    } else if (view === 'list') {
+      setView('projects');
+      setCurrentProjectId(null);
+    } else {
+      setView('list');
+      setSelectedId(null);
+    }
+  };
+
+  const handleEdit = (id: string) => {
+    setSelectedId(id);
+    setView('edit');
+  };
+
+  const handleCreate = () => {
+    setView('create');
+  };
+
+  const handleSaved = (sub: Subscription, isNew: boolean) => {
+    fetchSubscriptions();
+    setView('detail');
+    setSelectedId(sub.id);
+    showMessage('success', isNew ? 'Subscription created' : 'Subscription updated');
+  };
+
+  const handleDeleted = () => {
+    fetchSubscriptions();
+    handleBack();
+    showMessage('success', 'Subscription deleted');
+  };
+
+  const handleClearHistory = async () => {
+    if (!currentProjectId) return;
+    if (!confirm('Clear all scan history for this project?')) return;
+
+    try {
+      await clearProjectScanHistory(currentProjectId);
+      setScanHistory([]);
+      showMessage('success', 'Scan history cleared');
+    } catch (e) {
+      showMessage('error', 'Failed to clear history');
+    }
+  };
+
+  const selectedSub = subscriptions.find(s => s.id === selectedId) || null;
+  const currentProject = projects.find(p => p.id === currentProjectId);
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: 24 }}>
+      <header style={{ marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid #eee' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 style={{ fontSize: 24, marginBottom: 0 }}>codesub</h1>
+          {projects.length > 0 && (
+            <ProjectSelector
+              projects={projects}
+              currentProjectId={currentProjectId}
+              onSelect={(id) => {
+                if (id) {
+                  handleSelectProject(id);
+                } else {
+                  setCurrentProjectId(null);
+                  setView('projects');
+                }
+              }}
+            />
+          )}
+        </div>
+        {currentProject && baselineRef && (
+          <p style={{ color: '#666', fontSize: 13, marginTop: 4 }}>
+            <span style={{ fontFamily: 'monospace' }}>{baselineRef.slice(0, 8)}</span>
+            {baselineTitle && <span> - {baselineTitle}</span>}
+          </p>
+        )}
+      </header>
+
+      {message && (
+        <div style={{
+          padding: '12px 16px',
+          marginBottom: 20,
+          borderRadius: 4,
+          background: message.type === 'success' ? '#d4edda' : '#f8d7da',
+          color: message.type === 'success' ? '#155724' : '#721c24',
+        }}>
+          {message.text}
+        </div>
+      )}
+
+      {/* Project Views */}
+      {view === 'projects' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+            <h2>Projects</h2>
+            <button
+              onClick={() => setView('project-add')}
+              style={{ background: '#0066cc', color: 'white', border: '1px solid #0066cc', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' }}
+            >
+              + Add Project
+            </button>
+          </div>
+          {projectLoading ? (
+            <p style={{ color: '#666' }}>Loading...</p>
+          ) : (
+            <ProjectList
+              projects={projects}
+              onSelect={handleSelectProject}
+              onAddProject={() => setView('project-add')}
+            />
+          )}
+        </>
+      )}
+
+      {view === 'project-add' && (
+        <ProjectForm
+          onCancel={() => setView('projects')}
+          onSaved={handleProjectSaved}
+          showMessage={showMessage}
+        />
+      )}
+
+      {/* Subscription List */}
+      {view === 'list' && currentProjectId && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+              <button onClick={handleBack} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>Back to Projects</button>
+              <StatusFilter value={filter} onChange={setFilter} />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setView('scan')} style={{ padding: '8px 16px', border: '1px solid #ddd', borderRadius: 4, cursor: 'pointer' }}>
+                Run Scan
+              </button>
+              <button
+                onClick={handleCreate}
+                style={{ background: '#0066cc', color: 'white', border: '1px solid #0066cc', padding: '8px 16px', borderRadius: 4, cursor: 'pointer' }}
+              >
+                + New Subscription
+              </button>
+            </div>
+          </div>
+
+          {loading && <p style={{ color: '#666' }}>Loading...</p>}
+
+          {error && (
+            <div style={{ padding: 16, background: '#f8d7da', color: '#721c24', borderRadius: 4 }}>
+              <strong>Error:</strong> {error}
+            </div>
+          )}
+
+          {!loading && !error && (
+            <SubscriptionList
+              subscriptions={subscriptions}
+              onSelect={handleSelect}
+            />
+          )}
+        </>
+      )}
+
+      {/* Subscription Detail */}
+      {view === 'detail' && selectedSub && currentProjectId && (
+        <SubscriptionDetail
+          subscription={selectedSub}
+          projectId={currentProjectId}
+          onBack={handleBack}
+          onEdit={() => handleEdit(selectedSub.id)}
+          onDeleted={handleDeleted}
+          onReactivated={fetchSubscriptions}
+          showMessage={showMessage}
+        />
+      )}
+
+      {/* Subscription Form */}
+      {(view === 'create' || view === 'edit') && currentProjectId && (
+        <SubscriptionForm
+          subscription={view === 'edit' ? selectedSub : null}
+          projectId={currentProjectId}
+          onCancel={view === 'edit' && selectedSub ? () => setView('detail') : handleBack}
+          onSaved={handleSaved}
+          showMessage={showMessage}
+        />
+      )}
+
+      {/* Scan View */}
+      {view === 'scan' && currentProjectId && (
+        <ScanView
+          projectId={currentProjectId}
+          baselineRef={baselineRef}
+          onBack={handleBack}
+          onViewHistory={() => {
+            loadScanHistory();
+            setView('scan-history');
+          }}
+          showMessage={showMessage}
+          onBaselineUpdated={fetchSubscriptions}
+        />
+      )}
+
+      {/* Scan History */}
+      {view === 'scan-history' && currentProjectId && (
+        <ScanHistoryList
+          scans={scanHistory}
+          onSelect={(id) => {
+            // Could navigate to scan-detail view
+            console.log('Selected scan:', id);
+          }}
+          onClear={handleClearHistory}
+          onBack={() => setView('scan')}
+        />
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="src/codesub/update_doc.py">
+"""Update document generation for codesub."""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .models import Proposal, ScanResult, Trigger
+
+
+def result_to_dict(result: ScanResult) -> dict[str, Any]:
+    """
+    Convert a ScanResult to a dictionary for JSON serialization.
+
+    Args:
+        result: The scan result.
+
+    Returns:
+        Dictionary representation.
+    """
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "base_ref": result.base_ref,
+        "target_ref": result.target_ref,
+        "triggers": [_trigger_to_dict(t) for t in result.triggers],
+        "proposals": [_proposal_to_dict(p) for p in result.proposals],
+    }
+
+
+def _trigger_to_dict(trigger: Trigger) -> dict[str, Any]:
+    """Convert a Trigger to a dictionary."""
+    result = {
+        "subscription_id": trigger.subscription_id,
+        "path": trigger.path,
+        "start_line": trigger.start_line,
+        "end_line": trigger.end_line,
+        "reasons": trigger.reasons,
+        "label": trigger.subscription.label,
+        "matching_hunks": [
+            {
+                "old_start": h.old_start,
+                "old_count": h.old_count,
+                "new_start": h.new_start,
+                "new_count": h.new_count,
+            }
+            for h in trigger.matching_hunks
+        ],
+    }
+    # Add semantic-specific fields if present
+    if trigger.change_type is not None:
+        result["change_type"] = trigger.change_type
+    if trigger.details is not None:
+        result["details"] = trigger.details
+    return result
+
+
+def _proposal_to_dict(proposal: Proposal) -> dict[str, Any]:
+    """Convert a Proposal to a dictionary."""
+    result = {
+        "subscription_id": proposal.subscription_id,
+        "old_path": proposal.old_path,
+        "old_start": proposal.old_start,
+        "old_end": proposal.old_end,
+        "new_path": proposal.new_path,
+        "new_start": proposal.new_start,
+        "new_end": proposal.new_end,
+        "reasons": proposal.reasons,
+        "confidence": proposal.confidence,
+        "shift": proposal.shift,
+        "label": proposal.subscription.label,
+    }
+    # Add semantic-specific fields if present
+    if proposal.new_qualname is not None:
+        result["new_qualname"] = proposal.new_qualname
+    if proposal.new_kind is not None:
+        result["new_kind"] = proposal.new_kind
+    return result
+
+
+def write_update_doc(result: ScanResult, path: str | Path) -> None:
+    """
+    Write a JSON update document.
+
+    Args:
+        result: The scan result.
+        path: Path to write the document.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data = result_to_dict(result)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def write_markdown_doc(result: ScanResult, path: str | Path) -> None:
+    """
+    Write a human-readable markdown summary.
+
+    Args:
+        result: The scan result.
+        path: Path to write the document.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "# Code Subscription Scan Report",
+        "",
+        f"**Base:** `{result.base_ref[:12]}`",
+        f"**Target:** `{result.target_ref[:12]}`",
+        f"**Generated:** {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+        "",
+    ]
+
+    # Summary
+    lines.extend([
+        "## Summary",
+        "",
+        f"- **Triggered:** {len(result.triggers)}",
+        f"- **Proposed Updates:** {len(result.proposals)}",
+        f"- **Unchanged:** {len(result.unchanged)}",
+        "",
+    ])
+
+    # Triggered subscriptions
+    if result.triggers:
+        lines.extend([
+            "## Triggered Subscriptions",
+            "",
+            "These subscriptions were triggered because the watched lines were modified:",
+            "",
+        ])
+
+        for trigger in result.triggers:
+            label = f" ({trigger.subscription.label})" if trigger.subscription.label else ""
+            location = f"{trigger.path}:{trigger.start_line}-{trigger.end_line}"
+            reasons = ", ".join(trigger.reasons)
+            lines.extend([
+                f"### `{trigger.subscription_id[:8]}`{label}",
+                "",
+                f"- **Location:** `{location}`",
+                f"- **Reason:** {reasons}",
+            ])
+            if trigger.subscription.description:
+                lines.append(f"- **Description:** {trigger.subscription.description}")
+
+            if trigger.subscription.anchors:
+                lines.extend([
+                    "",
+                    "**Watched lines:**",
+                    "```",
+                ])
+                lines.extend(trigger.subscription.anchors.lines)
+                lines.extend(["```", ""])
+            else:
+                lines.append("")
+
+    # Proposed updates
+    if result.proposals:
+        lines.extend([
+            "## Proposed Updates",
+            "",
+            "These subscriptions need their locations updated (no content changes):",
+            "",
+        ])
+
+        for prop in result.proposals:
+            label = f" ({prop.subscription.label})" if prop.subscription.label else ""
+            old_loc = f"{prop.old_path}:{prop.old_start}-{prop.old_end}"
+            new_loc = f"{prop.new_path}:{prop.new_start}-{prop.new_end}"
+            reasons = ", ".join(prop.reasons)
+
+            lines.extend([
+                f"### `{prop.subscription_id[:8]}`{label}",
+                "",
+                f"- **Old:** `{old_loc}`",
+                f"- **New:** `{new_loc}`",
+                f"- **Reason:** {reasons}",
+            ])
+            if prop.shift:
+                lines.append(f"- **Shift:** {prop.shift:+d} lines")
+            lines.append("")
+
+    # Unchanged subscriptions
+    if result.unchanged:
+        lines.extend([
+            "## Unchanged Subscriptions",
+            "",
+            "These subscriptions were not affected by changes:",
+            "",
+        ])
+
+        for sub in result.unchanged:
+            label = f" ({sub.label})" if sub.label else ""
+            location = f"{sub.path}:{sub.start_line}-{sub.end_line}"
+            lines.append(f"- `{sub.id[:8]}`{label} - `{location}`")
+
+        lines.append("")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+</file>
+
+<file path="src/codesub/api.py">
+"""FastAPI REST API for codesub subscription management."""
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from .config_store import ConfigStore
+from .errors import (
+    CodesubError,
+    ConfigNotFoundError,
+    SubscriptionNotFoundError,
+    InvalidLocationError,
+    InvalidLineRangeError,
+    FileNotFoundAtRefError,
+    InvalidSchemaVersionError,
+    NotAGitRepoError,
+    GitError,
+    ProjectNotFoundError,
+    InvalidProjectPathError,
+    ScanNotFoundError,
+)
+from .git_repo import GitRepo
+from .models import Anchor, Subscription
+from .utils import parse_location, extract_anchors
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+from .detector import Detector
+from .updater import Updater
+from .update_doc import result_to_dict
+
+
+# --- Pydantic Schemas ---
+
+
+class AnchorSchema(BaseModel):
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+
+class SubscriptionSchema(BaseModel):
+    id: str
+    path: str
+    start_line: int
+    end_line: int
+    label: Optional[str] = None
+    description: Optional[str] = None
+    anchors: Optional[AnchorSchema] = None
+    active: bool = True
+    created_at: str
+    updated_at: str
+
+
+class SubscriptionCreateRequest(BaseModel):
+    """Request body for creating a subscription."""
+
+    location: str = Field(..., description="path:line or path:start-end format")
+    label: Optional[str] = None
+    description: Optional[str] = None
+    context: int = Field(default=2, ge=0, le=10)
+
+
+class SubscriptionUpdateRequest(BaseModel):
+    """Request body for updating a subscription."""
+
+    label: Optional[str] = None
+    description: Optional[str] = None
+
+
+class SubscriptionListResponse(BaseModel):
+    subscriptions: list[SubscriptionSchema]
+    count: int
+    baseline_ref: str
+    baseline_title: str = ""
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_type: str
+
+
+# --- Project Schemas ---
+
+
+class ProjectSchema(BaseModel):
+    id: str
+    name: str
+    path: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectCreateRequest(BaseModel):
+    path: str = Field(..., description="Absolute path to git repository")
+    name: Optional[str] = Field(None, description="Display name (defaults to dir name)")
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(..., description="New display name")
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectSchema]
+    count: int
+
+
+class ProjectStatusResponse(BaseModel):
+    project: ProjectSchema
+    path_exists: bool
+    codesub_initialized: bool
+    subscription_count: int
+    baseline_ref: Optional[str]
+
+
+# --- Scan Schemas ---
+
+
+class ScanRequest(BaseModel):
+    base_ref: str = Field(..., description="Base git ref (e.g., 'HEAD~1', 'baseline', commit hash)")
+    target_ref: Optional[str] = Field(default="HEAD", description="Target git ref ('HEAD', commit hash), or empty/null for working directory")
+
+
+class TriggerSchema(BaseModel):
+    subscription_id: str
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]
+    label: Optional[str]
+    change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
+
+
+class ProposalSchema(BaseModel):
+    subscription_id: str
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]
+    confidence: str
+    shift: Optional[int]
+    label: Optional[str]
+    new_qualname: Optional[str] = None  # For semantic subscriptions when construct renamed
+    new_kind: Optional[str] = None  # For semantic subscriptions if kind changed
+
+
+class ScanResultSchema(BaseModel):
+    base_ref: str
+    target_ref: str
+    triggers: list[TriggerSchema]
+    proposals: list[ProposalSchema]
+    unchanged_count: int
+
+
+class ScanHistoryEntrySchema(BaseModel):
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+
+
+class ScanHistoryListResponse(BaseModel):
+    scans: list[ScanHistoryEntrySchema]
+    count: int
+
+
+class ApplyUpdatesRequest(BaseModel):
+    scan_id: str = Field(..., description="Scan ID to apply proposals from")
+    proposal_ids: Optional[list[str]] = Field(
+        None,
+        description="Specific proposal IDs to apply (all if not specified)"
+    )
+
+
+class ApplyUpdatesResponse(BaseModel):
+    applied: list[str]
+    warnings: list[str]
+    new_baseline: Optional[str]
+
+
+# --- Helper Functions ---
+
+
+def get_project_store() -> ProjectStore:
+    """Get the global ProjectStore."""
+    return ProjectStore()
+
+
+def get_scan_history() -> ScanHistory:
+    """Get the global ScanHistory."""
+    return ScanHistory()
+
+
+def get_project_store_and_repo(project_id: str) -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for a specific project."""
+    project_store = get_project_store()
+    project = project_store.get_project(project_id)
+
+    repo = GitRepo(project.path)
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
+    """Convert dataclass Subscription to Pydantic schema."""
+    anchors = None
+    if sub.anchors:
+        anchors = AnchorSchema(
+            context_before=sub.anchors.context_before,
+            lines=sub.anchors.lines,
+            context_after=sub.anchors.context_after,
+        )
+    return SubscriptionSchema(
+        id=sub.id,
+        path=sub.path,
+        start_line=sub.start_line,
+        end_line=sub.end_line,
+        label=sub.label,
+        description=sub.description,
+        anchors=anchors,
+        active=sub.active,
+        created_at=sub.created_at,
+        updated_at=sub.updated_at,
+    )
+
+
+# --- FastAPI App ---
+
+
+app = FastAPI(
+    title="codesub API",
+    description="REST API for managing code subscriptions",
+    version="0.1.0",
+)
+
+# CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Global Exception Handler ---
+
+
+# Map exception types to HTTP status codes
+ERROR_STATUS_CODES: dict[type, int] = {
+    ConfigNotFoundError: 409,
+    SubscriptionNotFoundError: 404,
+    InvalidLocationError: 400,
+    InvalidLineRangeError: 400,
+    FileNotFoundAtRefError: 404,
+    InvalidSchemaVersionError: 500,
+    NotAGitRepoError: 500,
+    GitError: 500,
+    ProjectNotFoundError: 404,
+    InvalidProjectPathError: 400,
+    ScanNotFoundError: 404,
+}
+
+
+@app.exception_handler(CodesubError)
+async def codesub_error_handler(request: Request, exc: CodesubError) -> JSONResponse:
+    """Map CodesubError subclasses to appropriate HTTP responses."""
+    status_code = ERROR_STATUS_CODES.get(type(exc), 500)
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": str(exc), "error_type": type(exc).__name__},
+    )
+
+
+# --- Endpoints ---
+
+
+@app.get("/api/subscriptions", response_model=SubscriptionListResponse)
+def list_subscriptions(include_inactive: bool = Query(default=False)):
+    """List all subscriptions, optionally including inactive ones."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.get("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_subscription(sub_id: str):
+    """Get a single subscription by ID (supports partial ID matching)."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_subscription(request: SubscriptionCreateRequest):
+    """Create a new subscription."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+
+    # Parse and validate location
+    path, start_line, end_line = parse_location(request.location)
+
+    # Validate file exists at baseline
+    baseline = config.repo.baseline_ref
+    lines = repo.show_file(baseline, path)
+
+    # Validate line range
+    if end_line > len(lines):
+        raise InvalidLineRangeError(
+            start_line, end_line, f"exceeds file length ({len(lines)} lines)"
+        )
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, start_line, end_line, context=request.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=path,
+        start_line=start_line,
+        end_line=end_line,
+        label=request.label,
+        description=request.description,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description.
+
+    PATCH semantics:
+    - Omitted field: keep existing value
+    - Empty string "": clear to null
+    - Explicit null: clear to null
+    """
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    # Get the fields that were actually sent in the request
+    update_data = request.model_dump(exclude_unset=True)
+
+    # Update fields if provided
+    if "label" in update_data:
+        # Empty string becomes None
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        # Empty string becomes None
+        sub.description = request.description if request.description else None
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_subscription(sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_subscription(sub_id: str):
+    """Reactivate a deactivated subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint. Always returns 200."""
+    try:
+        store, repo = get_store_and_repo()
+        config_exists = store.exists()
+        baseline_ref = None
+        if config_exists:
+            config = store.load()
+            baseline_ref = config.repo.baseline_ref
+        return {
+            "status": "ok",
+            "config_initialized": config_exists,
+            "repo_root": str(repo.root),
+            "baseline_ref": baseline_ref,
+        }
+    except NotAGitRepoError:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": "Not running in a git repository",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": str(e),
+        }
+
+
+# --- Project Endpoints ---
+
+
+@app.get("/api/projects", response_model=ProjectListResponse)
+def list_projects():
+    """List all registered projects."""
+    store = get_project_store()
+    projects = store.list_projects()
+    return ProjectListResponse(
+        projects=[ProjectSchema(**p.to_dict()) for p in projects],
+        count=len(projects),
+    )
+
+
+@app.post("/api/projects", response_model=ProjectSchema, status_code=201)
+def create_project(request: ProjectCreateRequest):
+    """Register a new project."""
+    store = get_project_store()
+    project = store.add_project(path=request.path, name=request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
+def get_project_status(project_id: str):
+    """Get project details and status."""
+    store = get_project_store()
+    status = store.get_project_status(project_id)
+    return ProjectStatusResponse(
+        project=ProjectSchema(**status["project"]),
+        path_exists=status["path_exists"],
+        codesub_initialized=status["codesub_initialized"],
+        subscription_count=status["subscription_count"],
+        baseline_ref=status["baseline_ref"],
+    )
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectSchema)
+def update_project(project_id: str, request: ProjectUpdateRequest):
+    """Update project name."""
+    store = get_project_store()
+    project = store.update_project(project_id, request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.delete("/api/projects/{project_id}", response_model=ProjectSchema)
+def delete_project(project_id: str):
+    """Remove a project from the registry."""
+    store = get_project_store()
+    project = store.remove_project(project_id)
+    return ProjectSchema(**project.to_dict())
+
+
+# --- Project Subscriptions Endpoints ---
+
+
+@app.get("/api/projects/{project_id}/subscriptions", response_model=SubscriptionListResponse)
+def list_project_subscriptions(
+    project_id: str,
+    include_inactive: bool = Query(default=False)
+):
+    """List subscriptions for a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
+    """Create a new subscription in a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Parse and validate location
+    path, start_line, end_line = parse_location(request.location)
+
+    # Validate file exists at baseline
+    baseline = config.repo.baseline_ref
+    lines = repo.show_file(baseline, path)
+
+    # Validate line range
+    if end_line > len(lines):
+        raise InvalidLineRangeError(
+            start_line, end_line, f"exceeds file length ({len(lines)} lines)"
+        )
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, start_line, end_line, context=request.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=path,
+        start_line=start_line,
+        end_line=end_line,
+        label=request.label,
+        description=request.description,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_project_subscription(project_id: str, sub_id: str):
+    """Get a single subscription by ID within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_project_subscription(project_id: str, sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    update_data = request.model_dump(exclude_unset=True)
+
+    if "label" in update_data:
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        sub.description = request.description if request.description else None
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_project_subscription(project_id: str, sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/projects/{project_id}/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_project_subscription(project_id: str, sub_id: str):
+    """Reactivate a deactivated subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+# --- Scan Endpoints ---
+
+
+@app.post("/api/projects/{project_id}/scan", response_model=ScanHistoryEntrySchema)
+def run_project_scan(project_id: str, request: ScanRequest):
+    """
+    Run a scan for a project and save to history.
+
+    Special ref values:
+    - "baseline": Use project's configured baseline ref
+    - "HEAD~N": N commits back from HEAD
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Resolve refs
+    base_ref = request.base_ref
+    target_ref = request.target_ref
+
+    # Handle special values
+    if base_ref == "baseline":
+        base_ref = config.repo.baseline_ref
+
+    # Resolve to commit hashes (empty target_ref means working directory)
+    base_ref = repo.resolve_ref(base_ref)
+    if target_ref:
+        target_ref = repo.resolve_ref(target_ref)
+    else:
+        target_ref = None  # Working directory
+
+    # Run scan
+    detector = Detector(repo)
+    result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+    # Convert to dict and save to history
+    result_dict = result_to_dict(result)
+    history = get_scan_history()
+    entry = history.save_scan(project_id, result_dict)
+
+    return ScanHistoryEntrySchema(
+        id=entry.id,
+        project_id=entry.project_id,
+        base_ref=entry.base_ref,
+        target_ref=entry.target_ref,
+        trigger_count=entry.trigger_count,
+        proposal_count=entry.proposal_count,
+        unchanged_count=entry.unchanged_count,
+        created_at=entry.created_at,
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history", response_model=ScanHistoryListResponse)
+def list_scan_history(
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100)
+):
+    """List scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entries = history.list_scans(project_id, limit=limit)
+
+    return ScanHistoryListResponse(
+        scans=[
+            ScanHistoryEntrySchema(
+                id=e.id,
+                project_id=e.project_id,
+                base_ref=e.base_ref,
+                target_ref=e.target_ref,
+                trigger_count=e.trigger_count,
+                proposal_count=e.proposal_count,
+                unchanged_count=e.unchanged_count,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ],
+        count=len(entries),
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history/{scan_id}")
+def get_scan_result(project_id: str, scan_id: str):
+    """Get a specific scan result with full details."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entry = history.get_scan(project_id, scan_id)
+
+    return entry.to_dict()
+
+
+@app.delete("/api/projects/{project_id}/scan-history")
+def clear_project_scan_history(project_id: str):
+    """Clear all scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    count = history.clear_project_history(project_id)
+
+    return {"deleted": count}
+
+
+@app.delete("/api/scan-history")
+def clear_all_scan_history():
+    """Clear all scan history for all projects."""
+    history = get_scan_history()
+    count = history.clear_all_history()
+
+    return {"deleted": count}
+
+
+# --- Apply Updates Endpoint ---
+
+
+@app.post("/api/projects/{project_id}/apply-updates", response_model=ApplyUpdatesResponse)
+def apply_project_updates(project_id: str, request: ApplyUpdatesRequest):
+    """
+    Apply proposals from a scan result.
+
+    Updates subscriptions and advances baseline to the scan's target_ref.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+
+    # Get the scan result
+    history = get_scan_history()
+    entry = history.get_scan(project_id, request.scan_id)
+    scan_result = entry.scan_result
+
+    # Filter proposals if specific IDs requested
+    proposals = scan_result.get("proposals", [])
+    if request.proposal_ids:
+        proposals = [p for p in proposals if p["subscription_id"] in request.proposal_ids]
+
+    # Build update document format
+    update_data = {
+        "target_ref": scan_result.get("target_ref", ""),
+        "proposals": proposals,
+    }
+
+    # Apply updates
+    updater = Updater(store, repo)
+    applied, warnings = updater.apply(update_data)
+
+    return ApplyUpdatesResponse(
+        applied=applied,
+        warnings=warnings,
+        new_baseline=scan_result.get("target_ref") if applied else None,
+    )
+</file>
+
+<file path="src/codesub/detector.py">
+"""Change detection for codesub."""
+
+from typing import TYPE_CHECKING
+
+from .diff_parser import DiffParser, ranges_overlap
+from .git_repo import GitRepo
+from .models import FileDiff, Hunk, Proposal, ScanResult, SemanticTarget, Subscription, Trigger
+
+if TYPE_CHECKING:
+    from .semantic import Construct
+
+
+class Detector:
+    """Detects changes affecting subscriptions."""
+
+    def __init__(self, repo: GitRepo):
+        self.repo = repo
+        self.parser = DiffParser()
+
+    def scan(
+        self,
+        subscriptions: list[Subscription],
+        base_ref: str,
+        target_ref: str | None = None,
+    ) -> ScanResult:
+        """
+        Scan for changes between two refs, or between a ref and working directory.
+
+        Args:
+            subscriptions: List of subscriptions to check.
+            base_ref: Base git ref.
+            target_ref: Target git ref, or None/empty for working directory.
+
+        Returns:
+            ScanResult with triggers, proposals, and unchanged subscriptions.
+        """
+        # Only process active subscriptions
+        active_subs = [s for s in subscriptions if s.active]
+
+        # Use "WORKING" to represent working directory
+        display_target = target_ref or "WORKING"
+
+        if not active_subs:
+            return ScanResult(
+                base_ref=base_ref,
+                target_ref=display_target,
+                triggers=[],
+                proposals=[],
+                unchanged=[],
+            )
+
+        # Get diffs
+        patch_text = self.repo.diff_patch(base_ref, target_ref)
+        name_status_text = self.repo.diff_name_status(base_ref, target_ref)
+
+        # Parse diffs
+        file_diffs = self.parser.parse_patch(patch_text)
+        rename_map, status_map = self.parser.parse_name_status(name_status_text)
+
+        # Build lookup by old path
+        diff_by_path: dict[str, FileDiff] = {}
+        for fd in file_diffs:
+            diff_by_path[fd.old_path] = fd
+
+        triggers: list[Trigger] = []
+        proposals: list[Proposal] = []
+        unchanged: list[Subscription] = []
+
+        for sub in active_subs:
+            # Check if semantic subscription
+            if sub.semantic is not None:
+                trigger, proposal = self._check_semantic(
+                    sub, base_ref, target_ref, rename_map, status_map
+                )
+                if trigger:
+                    triggers.append(trigger)
+                if proposal:
+                    proposals.append(proposal)
+                if not trigger and not proposal:
+                    unchanged.append(sub)
+                continue
+
+            # Line-based subscription
+            # Check if file was renamed
+            new_path = rename_map.get(sub.path, sub.path)
+            is_renamed = new_path != sub.path
+
+            # Check if file was deleted
+            file_status = status_map.get(sub.path, "")
+            is_deleted = file_status == "D"
+
+            # Get diff for this file
+            file_diff = diff_by_path.get(sub.path)
+
+            # Check for triggers
+            trigger = self._check_trigger(sub, file_diff, is_deleted)
+
+            if trigger:
+                triggers.append(trigger)
+            else:
+                # Check for proposals (shift or rename)
+                proposal = self._compute_proposal(
+                    sub, file_diff, is_renamed, new_path
+                )
+                if proposal:
+                    proposals.append(proposal)
+                else:
+                    unchanged.append(sub)
+
+        return ScanResult(
+            base_ref=base_ref,
+            target_ref=display_target,
+            triggers=triggers,
+            proposals=proposals,
+            unchanged=unchanged,
+        )
+
+    def _check_trigger(
+        self,
+        sub: Subscription,
+        file_diff: FileDiff | None,
+        is_deleted: bool,
+    ) -> Trigger | None:
+        """
+        Check if a subscription is triggered by changes.
+
+        Returns:
+            Trigger if triggered, None otherwise.
+        """
+        if is_deleted:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["file_deleted"],
+                matching_hunks=[],
+            )
+
+        if file_diff is None:
+            return None
+
+        if file_diff.is_deleted_file:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["file_deleted"],
+                matching_hunks=[],
+            )
+
+        matching_hunks: list[Hunk] = []
+        reasons: list[str] = []
+
+        for hunk in file_diff.hunks:
+            if hunk.old_count > 0:
+                # Modification or deletion: check for overlap
+                hunk_start = hunk.old_start
+                hunk_end = hunk.old_start + hunk.old_count - 1
+
+                if ranges_overlap(sub.start_line, sub.end_line, hunk_start, hunk_end):
+                    matching_hunks.append(hunk)
+                    if "overlap_hunk" not in reasons:
+                        reasons.append("overlap_hunk")
+            else:
+                # Pure insertion (old_count == 0)
+                # In git diff, old_start is the line AFTER which new content is inserted.
+                #
+                # Trigger semantics (conservative - trigger if insertion could affect
+                # the logical unit being watched):
+                # - Insert after line 5 when watching 5-10: triggers (between watched lines)
+                # - Insert after line 4 when watching 5-10: doesn't trigger (before range, will shift)
+                # - Insert after line 9 when watching 5-10: triggers (between watched lines)
+                # - Insert after line 10 when watching 5-10: doesn't trigger (after range)
+                #
+                # Condition: sub_start <= old_start < sub_end
+                # This triggers when insertion is between the first and last watched lines
+                # but NOT when insertion is immediately after the last line.
+                if sub.start_line <= hunk.old_start < sub.end_line:
+                    matching_hunks.append(hunk)
+                    if "insert_inside_range" not in reasons:
+                        reasons.append("insert_inside_range")
+
+        if reasons:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=reasons,
+                matching_hunks=matching_hunks,
+            )
+
+        return None
+
+    def _compute_proposal(
+        self,
+        sub: Subscription,
+        file_diff: FileDiff | None,
+        is_renamed: bool,
+        new_path: str,
+    ) -> Proposal | None:
+        """
+        Compute a proposal for updating a subscription (shift or rename).
+
+        Only called for non-triggered subscriptions.
+
+        Returns:
+            Proposal if updates needed, None otherwise.
+        """
+        shift = 0
+
+        if file_diff is not None and file_diff.hunks:
+            shift = self._calculate_shift(sub, file_diff.hunks)
+
+        # Create proposal if there's a shift or rename
+        if shift != 0 or is_renamed:
+            reasons = []
+            if is_renamed:
+                reasons.append("rename")
+            if shift != 0:
+                reasons.append("line_shift")
+
+            return Proposal(
+                subscription_id=sub.id,
+                subscription=sub,
+                old_path=sub.path,
+                old_start=sub.start_line,
+                old_end=sub.end_line,
+                new_path=new_path,
+                new_start=sub.start_line + shift,
+                new_end=sub.end_line + shift,
+                reasons=reasons,
+                confidence="high",
+                shift=shift if shift != 0 else None,
+            )
+
+        return None
+
+    def _calculate_shift(self, sub: Subscription, hunks: list[Hunk]) -> int:
+        """
+        Calculate line number shift for a subscription.
+
+        IMPORTANT: This should only be called for non-triggered subscriptions,
+        meaning no hunk overlaps with the subscription range.
+
+        Args:
+            sub: The subscription.
+            hunks: List of hunks from the file diff (will be sorted if needed).
+
+        Returns:
+            Net shift in line numbers.
+        """
+        # Defensive sort - ensure hunks are in ascending old_start order
+        sorted_hunks = sorted(hunks, key=lambda h: h.old_start)
+
+        shift = 0
+        sub_start = sub.start_line
+
+        for hunk in sorted_hunks:
+            delta = hunk.new_count - hunk.old_count
+
+            if hunk.old_count == 0:
+                # Pure insertion: affects lines > old_start
+                # old_start is the line AFTER which insertion happens
+                if hunk.old_start < sub_start:
+                    shift += delta
+            else:
+                # Modification/deletion: old_end = old_start + old_count - 1
+                old_end = hunk.old_start + hunk.old_count - 1
+
+                if old_end < sub_start:
+                    # Hunk is entirely before subscription
+                    shift += delta
+                elif hunk.old_start > sub.end_line:
+                    # Hunk is entirely after subscription, stop processing
+                    # (hunks are sorted)
+                    break
+                # else: hunk overlaps subscription, but we shouldn't reach here
+                # because overlapping hunks would have triggered the subscription
+
+        return shift
+
+    def _check_semantic(
+        self,
+        sub: Subscription,
+        base_ref: str,
+        target_ref: str | None,
+        rename_map: dict[str, str],
+        status_map: dict[str, str],
+    ) -> tuple[Trigger | None, Proposal | None]:
+        """Check semantic subscription for changes."""
+        from .semantic import PythonIndexer
+
+        indexer = PythonIndexer()
+
+        # Resolve file rename
+        old_path = sub.path
+        new_path = rename_map.get(old_path, old_path)
+
+        # Check if file deleted
+        if status_map.get(old_path) == "D":
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=old_path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["file_deleted"],
+                    matching_hunks=[],
+                    change_type="MISSING",
+                ),
+                None,
+            )
+
+        # Get old file content
+        old_source = "\n".join(self.repo.show_file(base_ref, old_path))
+
+        # Get new file content
+        try:
+            if target_ref:
+                new_source = "\n".join(self.repo.show_file(target_ref, new_path))
+            else:
+                # Working directory
+                with open(self.repo.root / new_path) as f:
+                    new_source = f.read()
+        except Exception:
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=old_path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["file_not_found"],
+                    matching_hunks=[],
+                    change_type="MISSING",
+                ),
+                None,
+            )
+
+        assert sub.semantic is not None  # Type narrowing
+
+        # Stage 1: Exact match by qualname
+        old_construct = indexer.find_construct(
+            old_source, old_path, sub.semantic.qualname, sub.semantic.kind
+        )
+        new_construct = indexer.find_construct(
+            new_source, new_path, sub.semantic.qualname, sub.semantic.kind
+        )
+
+        if new_construct:
+            # Found by exact qualname - check for changes
+            trigger = self._classify_semantic_change(sub, old_construct, new_construct)
+            proposal = None
+
+            # Check if path changed (file renamed)
+            if old_path != new_path:
+                proposal = Proposal(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    old_path=old_path,
+                    old_start=sub.start_line,
+                    old_end=sub.end_line,
+                    new_path=new_path,
+                    new_start=new_construct.start_line,
+                    new_end=new_construct.end_line,
+                    reasons=["rename"],
+                    confidence="high",
+                )
+            elif (
+                new_construct.start_line != sub.start_line
+                or new_construct.end_line != sub.end_line
+            ):
+                proposal = Proposal(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    old_path=old_path,
+                    old_start=sub.start_line,
+                    old_end=sub.end_line,
+                    new_path=new_path,
+                    new_start=new_construct.start_line,
+                    new_end=new_construct.end_line,
+                    reasons=["line_shift"],
+                    confidence="high",
+                )
+
+            return trigger, proposal
+
+        # Stage 2: Hash-based search
+        new_constructs = indexer.index_file(new_source, new_path)
+        match = self._find_by_hash(sub.semantic, new_constructs)
+
+        if match:
+            # Found by hash - it was renamed/moved
+            trigger = self._classify_semantic_change(sub, old_construct, match)
+            proposal = Proposal(
+                subscription_id=sub.id,
+                subscription=sub,
+                old_path=old_path,
+                old_start=sub.start_line,
+                old_end=sub.end_line,
+                new_path=new_path,
+                new_start=match.start_line,
+                new_end=match.end_line,
+                reasons=["semantic_location"],
+                confidence="high",
+                new_qualname=match.qualname,
+                new_kind=match.kind,
+            )
+            return trigger, proposal
+
+        # Not found at all
+        return (
+            Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=old_path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["semantic_target_missing"],
+                matching_hunks=[],
+                change_type="MISSING",
+            ),
+            None,
+        )
+
+    def _classify_semantic_change(
+        self,
+        sub: Subscription,
+        old_construct: "Construct | None",
+        new_construct: "Construct",
+    ) -> Trigger | None:
+        """Classify change type between old and new construct."""
+        if old_construct is None or sub.semantic is None:
+            return None
+
+        old_fp = sub.semantic
+
+        # Check interface change (type/signature)
+        if old_fp.interface_hash != new_construct.interface_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["interface_changed"],
+                matching_hunks=[],
+                change_type="STRUCTURAL",
+            )
+
+        # Check body change (value/implementation)
+        if old_fp.body_hash != new_construct.body_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["body_changed"],
+                matching_hunks=[],
+                change_type="CONTENT",
+            )
+
+        # No meaningful change (cosmetic only)
+        return None
+
+    def _find_by_hash(
+        self,
+        semantic: SemanticTarget,
+        constructs: "list[Construct]",
+    ) -> "Construct | None":
+        """Find construct by hash matching."""
+        # Try exact match (both hashes)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash
+            and c.body_hash == semantic.body_hash
+            and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try body-only match (renamed + signature changed)
+        matches = [
+            c
+            for c in constructs
+            if c.body_hash == semantic.body_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try interface-only match (renamed + body changed)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        return None
+</file>
+
+<file path="src/codesub/models.py">
+"""Data models for codesub."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+import uuid
+
+
+def _utc_now() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _generate_id() -> str:
+    """Generate a new subscription ID."""
+    return str(uuid.uuid4())
+
+
+@dataclass
+class SemanticTarget:
+    """Semantic identifier for a code construct."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save"
+    role: str | None = None  # "const" for constants, else None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "language": self.language,
+            "kind": self.kind,
+            "qualname": self.qualname,
+            "role": self.role,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+            "fingerprint_version": self.fingerprint_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+        return cls(
+            language=data["language"],
+            kind=data["kind"],
+            qualname=data["qualname"],
+            role=data.get("role"),
+            interface_hash=data.get("interface_hash", ""),
+            body_hash=data.get("body_hash", ""),
+            fingerprint_version=data.get("fingerprint_version", 1),
+        )
+
+
+@dataclass
+class Anchor:
+    """Context lines around a subscription for display and future fuzzy matching."""
+
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_before": self.context_before,
+            "lines": self.lines,
+            "context_after": self.context_after,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Anchor":
+        return cls(
+            context_before=data.get("context_before", []),
+            lines=data.get("lines", []),
+            context_after=data.get("context_after", []),
+        )
+
+
+@dataclass
+class Subscription:
+    """A subscription to a file line range."""
+
+    id: str
+    path: str  # repo-relative, POSIX-style
+    start_line: int  # 1-based inclusive
+    end_line: int  # 1-based inclusive
+    label: str | None = None
+    description: str | None = None
+    anchors: Anchor | None = None
+    semantic: SemanticTarget | None = None
+    active: bool = True
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "id": self.id,
+            "path": self.path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "active": self.active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+        if self.label is not None:
+            result["label"] = self.label
+        if self.description is not None:
+            result["description"] = self.description
+        if self.anchors is not None:
+            result["anchors"] = self.anchors.to_dict()
+        if self.semantic is not None:
+            result["semantic"] = self.semantic.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Subscription":
+        anchors = None
+        if "anchors" in data:
+            anchors = Anchor.from_dict(data["anchors"])
+        semantic = None
+        if "semantic" in data:
+            semantic = SemanticTarget.from_dict(data["semantic"])
+        return cls(
+            id=data["id"],
+            path=data["path"],
+            start_line=data["start_line"],
+            end_line=data["end_line"],
+            label=data.get("label"),
+            description=data.get("description"),
+            anchors=anchors,
+            semantic=semantic,
+            active=data.get("active", True),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        path: str,
+        start_line: int,
+        end_line: int,
+        label: str | None = None,
+        description: str | None = None,
+        anchors: Anchor | None = None,
+        semantic: "SemanticTarget | None" = None,
+    ) -> "Subscription":
+        """Create a new subscription with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            label=label,
+            description=description,
+            anchors=anchors,
+            semantic=semantic,
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class RepoConfig:
+    """Repository-level configuration."""
+
+    baseline_ref: str
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "baseline_ref": self.baseline_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RepoConfig":
+        return cls(
+            baseline_ref=data["baseline_ref"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+
+@dataclass
+class Config:
+    """Full configuration containing repo config and subscriptions."""
+
+    schema_version: int
+    repo: RepoConfig
+    subscriptions: list[Subscription]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repo": self.repo.to_dict(),
+            "subscriptions": [s.to_dict() for s in self.subscriptions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Config":
+        return cls(
+            schema_version=data["schema_version"],
+            repo=RepoConfig.from_dict(data["repo"]),
+            subscriptions=[Subscription.from_dict(s) for s in data.get("subscriptions", [])],
+        )
+
+    @classmethod
+    def create(cls, baseline_ref: str) -> "Config":
+        """Create a new config with the given baseline ref."""
+        return cls(
+            schema_version=1,
+            repo=RepoConfig(baseline_ref=baseline_ref),
+            subscriptions=[],
+        )
+
+
+# Models for diff parsing
+
+
+@dataclass
+class Hunk:
+    """A single hunk from a unified diff."""
+
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+
+
+@dataclass
+class FileDiff:
+    """Diff information for a single file."""
+
+    old_path: str
+    new_path: str
+    hunks: list[Hunk]
+    is_rename: bool = False
+    is_new_file: bool = False
+    is_deleted_file: bool = False
+
+
+# Models for detection results
+
+
+@dataclass
+class Trigger:
+    """A subscription that was triggered by changes."""
+
+    subscription_id: str
+    subscription: Subscription
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range"]
+    matching_hunks: list[Hunk]
+    change_type: str | None = None  # "STRUCTURAL"|"CONTENT"|"MISSING"|"AMBIGUOUS"|"PARSE_ERROR"
+    details: dict[str, Any] | None = None
+
+
+@dataclass
+class Proposal:
+    """A proposed update to a subscription (rename or line shift)."""
+
+    subscription_id: str
+    subscription: Subscription
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]  # ["rename", "line_shift", "semantic_location"]
+    confidence: str = "high"  # "high" for POC (math-based)
+    shift: int | None = None
+    new_qualname: str | None = None  # For semantic subscriptions when construct renamed
+    new_kind: str | None = None  # For semantic subscriptions if kind changed
+
+
+@dataclass
+class ScanResult:
+    """Result of scanning for changes."""
+
+    base_ref: str
+    target_ref: str
+    triggers: list[Trigger]
+    proposals: list[Proposal]
+    unchanged: list[Subscription]  # Subscriptions with no changes or shifts
+
+
+# Models for multi-project management
+
+
+@dataclass
+class Project:
+    """A registered project (git repository with codesub initialized)."""
+
+    id: str
+    name: str  # Display name (defaults to repo directory name)
+    path: str  # Absolute path to the repository root
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Project":
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            path=data["path"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(cls, name: str, path: str) -> "Project":
+        """Create a new project with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            name=name,
+            path=path,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class ScanHistoryEntry:
+    """A persisted scan result."""
+
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+    scan_result: dict[str, Any]  # Full ScanResult as dict
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "base_ref": self.base_ref,
+            "target_ref": self.target_ref,
+            "trigger_count": self.trigger_count,
+            "proposal_count": self.proposal_count,
+            "unchanged_count": self.unchanged_count,
+            "created_at": self.created_at,
+            "scan_result": self.scan_result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScanHistoryEntry":
+        return cls(
+            id=data["id"],
+            project_id=data["project_id"],
+            base_ref=data["base_ref"],
+            target_ref=data["target_ref"],
+            trigger_count=data["trigger_count"],
+            proposal_count=data["proposal_count"],
+            unchanged_count=data["unchanged_count"],
+            created_at=data["created_at"],
+            scan_result=data["scan_result"],
+        )
+</file>
+
+</files>

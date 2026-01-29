@@ -1,0 +1,1781 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: src/codesub/models.py, src/codesub/config_store.py, src/codesub/errors.py, src/codesub/cli.py, src/codesub/utils.py, src/codesub/git_repo.py, pyproject.toml, tasks/codesub-frontend-subscription-management/plan.md, tasks/codesub-frontend-subscription-management/problem.md
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  codesub/
+    cli.py
+    config_store.py
+    errors.py
+    git_repo.py
+    models.py
+    utils.py
+tasks/
+  codesub-frontend-subscription-management/
+    plan.md
+    problem.md
+pyproject.toml
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="tasks/codesub-frontend-subscription-management/plan.md">
+# Implementation Plan: FastAPI + React Frontend for codesub
+
+## Overview
+
+Build a web interface for managing codesub subscriptions consisting of:
+1. **FastAPI backend** (`src/codesub/api.py`) - REST API that wraps existing `ConfigStore` operations
+2. **React frontend** (`frontend/`) - Single-page application using Vite
+3. **CLI integration** - New `codesub serve` command to start the API server
+
+The architecture reuses all existing business logic from `ConfigStore`, `GitRepo`, and validation utilities. The API layer is a thin wrapper that translates HTTP requests to `ConfigStore` method calls and handles error mapping.
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Reuse `ConfigStore` directly | All CRUD logic exists; no need to duplicate |
+| Pydantic models for API schemas | FastAPI integration, automatic validation, OpenAPI docs |
+| Map `CodesubError` to HTTP errors | Consistent error handling with proper status codes |
+| CORS with localhost origins | Required for local dev (Vite runs on different port) |
+| Vite + React | Fast dev experience, modern tooling, simple setup |
+| TypeScript for frontend | Type safety, better IDE support |
+| Manual path entry | Per requirements (no visual file browser) |
+| Static file serving from FastAPI | Single deployment artifact option |
+
+## File Structure (New Files)
+
+```
+/Users/vlad/dev/projects/codesub/
+├── src/codesub/
+│   ├── api.py          # FastAPI application and routes
+│   └── cli.py          # (modified) add "serve" command
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── index.html
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx
+│       ├── api.ts              # API client functions
+│       ├── types.ts            # TypeScript interfaces
+│       └── components/
+│           ├── SubscriptionList.tsx
+│           ├── SubscriptionDetail.tsx
+│           ├── SubscriptionForm.tsx
+│           └── StatusFilter.tsx
+├── tests/
+│   └── test_api.py     # API endpoint tests
+└── pyproject.toml      # (modified) add fastapi, uvicorn
+```
+
+## Implementation Steps
+
+### Step 1: Add Python Dependencies
+
+**File:** `pyproject.toml`
+
+Add `fastapi` and `uvicorn` to dependencies:
+```toml
+[tool.poetry.dependencies]
+python = ">=3.10"
+fastapi = ">=0.109.0"
+uvicorn = {version = ">=0.27.0", extras = ["standard"]}
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-cov = ">=4.0"
+httpx = ">=0.26.0"
+```
+
+Run `poetry install` after modification.
+
+---
+
+### Step 2: Create FastAPI Backend (`src/codesub/api.py`)
+
+Create the API module with:
+
+1. **Pydantic Schemas** for request/response validation:
+   - `AnchorSchema`, `SubscriptionSchema`
+   - `SubscriptionCreateRequest`, `SubscriptionUpdateRequest`
+   - `SubscriptionListResponse`, `ErrorResponse`
+
+2. **Helper Functions**:
+   - `get_store_and_repo()` - Get ConfigStore and GitRepo instances
+   - `subscription_to_schema()` - Convert dataclass to Pydantic model
+   - `handle_codesub_error()` - Map exceptions to HTTP status codes
+
+3. **FastAPI App** with CORS middleware for localhost origins
+
+4. **Endpoints**:
+   - `GET /api/subscriptions` - List subscriptions
+   - `GET /api/subscriptions/{id}` - Get single subscription
+   - `POST /api/subscriptions` - Create subscription (with full validation, see below)
+   - `PATCH /api/subscriptions/{id}` - Update subscription
+   - `DELETE /api/subscriptions/{id}` - Delete subscription
+   - `POST /api/subscriptions/{id}/reactivate` - Reactivate subscription
+   - `GET /api/health` - Health check
+
+**Subscription Creation Flow (POST /api/subscriptions)**:
+The create endpoint must replicate the validation logic from `cli.py:cmd_add()`:
+1. Parse location using `utils.parse_location(request.location)` → (path, start_line, end_line)
+2. Load config to get baseline ref: `config = store.load()`
+3. Validate file exists at baseline: `lines = repo.show_file(config.repo.baseline_ref, path)`
+4. Validate line range: `if end_line > len(lines): raise InvalidLineRangeError(...)`
+5. Extract anchors: `context_before, watched_lines, context_after = extract_anchors(lines, start_line, end_line, context=request.context)`
+6. Create Anchor and Subscription objects
+7. Save via `store.add_subscription(sub)`
+
+**Reactivate Flow (POST /api/subscriptions/{id}/reactivate)**:
+Note: `ConfigStore` has no `reactivate_subscription()` method. The API layer will:
+1. Get subscription: `sub = store.get_subscription(sub_id)`
+2. Check if already active: `if sub.active: raise HTTPException(400, "Already active")`
+3. Set active: `sub.active = True`
+4. Update: `store.update_subscription(sub)`
+
+---
+
+### Step 3: Add CLI `serve` Command (`src/codesub/cli.py`)
+
+Modify CLI to add `serve` subcommand:
+- Add `cmd_serve()` function that starts uvicorn server
+- Add serve subparser with `--host`, `--port`, `--reload` options
+- Register in commands dict
+
+---
+
+### Step 4: Create React Frontend - Project Setup
+
+Create `frontend/` directory with:
+- `package.json` - Dependencies (react, react-dom, vite, typescript)
+- `vite.config.ts` - Vite config with API proxy to localhost:8000 (note: API must run on port 8000 for proxy to work)
+- `tsconfig.json` - TypeScript configuration
+- `index.html` - Entry HTML file with minimal inline styles
+
+**Styling Approach:** Minimal inline styles for MVP. No CSS framework required for this initial implementation.
+
+---
+
+### Step 5: Create TypeScript Types (`frontend/src/types.ts`)
+
+Define interfaces matching API schemas:
+- `Anchor`, `Subscription`
+- `SubscriptionListResponse`
+- `SubscriptionCreateRequest`, `SubscriptionUpdateRequest`
+- `ApiError`, `FilterStatus`
+
+---
+
+### Step 6: Create API Client (`frontend/src/api.ts`)
+
+Implement fetch wrapper functions:
+- `listSubscriptions(includeInactive)`
+- `getSubscription(id)`
+- `createSubscription(data)`
+- `updateSubscription(id, data)`
+- `deleteSubscription(id, hard)`
+- `reactivateSubscription(id)`
+
+---
+
+### Step 7: Create React Components
+
+**Entry points:**
+- `main.tsx` - ReactDOM render
+- `App.tsx` - Main container with routing state, fetch logic, message display
+
+**Components:**
+- `StatusFilter.tsx` - Toggle active/all filter
+- `SubscriptionList.tsx` - Table of subscriptions with click-to-select
+- `SubscriptionDetail.tsx` - Full details view with delete/reactivate actions
+- `SubscriptionForm.tsx` - Create/edit form with validation feedback
+
+---
+
+### Step 8: Write API Tests (`tests/test_api.py`)
+
+Create test suite using FastAPI's TestClient:
+- `TestListSubscriptions` - Empty list, list with subscriptions
+- `TestCreateSubscription` - Success, invalid location, file not found, line out of range
+- `TestGetSubscription` - By full ID, by partial ID, not found
+- `TestUpdateSubscription` - Update label, update description
+- `TestDeleteSubscription` - Soft delete, hard delete
+- `TestReactivateSubscription` - Reactivate, already active
+- `TestHealthCheck` - Health endpoint
+
+---
+
+## API Design Summary
+
+| Method | Endpoint | Description | Status Codes |
+|--------|----------|-------------|--------------|
+| GET | `/api/subscriptions` | List subscriptions | 200, 503 |
+| GET | `/api/subscriptions/{id}` | Get single subscription | 200, 404, 503 |
+| POST | `/api/subscriptions` | Create subscription | 201, 400, 404, 503 |
+| PATCH | `/api/subscriptions/{id}` | Update label/description | 200, 404, 503 |
+| DELETE | `/api/subscriptions/{id}` | Delete (soft/hard) | 200, 404, 503 |
+| POST | `/api/subscriptions/{id}/reactivate` | Reactivate | 200, 400, 404, 503 |
+| GET | `/api/health` | Health check | 200 |
+
+**Query Parameters:**
+- `GET /api/subscriptions`: `include_inactive` (bool)
+- `DELETE /api/subscriptions/{id}`: `hard` (bool)
+
+---
+
+## Frontend Components Summary
+
+| Component | Purpose |
+|-----------|---------|
+| `App.tsx` | Main container, routing state, fetch/refresh logic |
+| `StatusFilter.tsx` | Toggle active/all filter |
+| `SubscriptionList.tsx` | Table of subscriptions |
+| `SubscriptionDetail.tsx` | Full details view, delete/reactivate actions |
+| `SubscriptionForm.tsx` | Create/edit form with validation feedback |
+
+---
+
+## Error Handling
+
+**Exception to HTTP Status Mapping:**
+- `ConfigNotFoundError` → 503 (Service Unavailable)
+- `SubscriptionNotFoundError` → 404 (Not Found)
+- `InvalidLocationError` → 400 (Bad Request)
+- `InvalidLineRangeError` → 400 (Bad Request)
+- `FileNotFoundAtRefError` → 404 (Not Found)
+- `InvalidSchemaVersionError` → 503 (Service Unavailable) - config file corrupted/incompatible
+- `NotAGitRepoError` → 503 (Service Unavailable) - server not started in a git repo
+- `GitError` → 500 (Internal Server Error) - git command failed
+- Other `CodesubError` → 500 (Internal Server Error)
+
+---
+
+## Edge Cases Considered
+
+- **Config not initialized**: API returns 503 with clear message; health endpoint reports `config_initialized: false`
+- **File not in repo**: Returns 404 with descriptive error from `FileNotFoundAtRefError`
+- **Line range exceeds file**: Returns 400 with line count information
+- **Ambiguous partial ID**: Returns 404 with "ambiguous" in message (existing behavior)
+- **Reactivate active subscription**: Returns 400 with explanation
+- **Empty label/description**: Stored as `null`, displayed as "-" in UI
+
+---
+
+## Testing Strategy
+
+- API unit tests via `TestClient` (covered in `test_api.py`)
+- Test CRUD operations: create, read, update, soft delete, hard delete
+- Test error cases: invalid location, file not found, subscription not found
+- Test edge cases: partial ID matching, reactivate already-active
+- Frontend: manual testing during development
+- Integration: run `codesub serve` and verify frontend connects
+
+---
+
+## Usage After Implementation
+
+```bash
+# Install dependencies
+poetry install
+cd frontend && npm install
+
+# Development mode (two terminals)
+# Terminal 1: API server with auto-reload
+codesub serve --reload
+
+# Terminal 2: Frontend dev server
+cd frontend && npm run dev
+
+# Production build
+cd frontend && npm run build
+# Serve frontend from FastAPI or copy build to static hosting
+```
+</file>
+
+<file path="tasks/codesub-frontend-subscription-management/problem.md">
+# Problem Statement: Create a Frontend for Codesub Subscription Management
+
+## Task Type
+**Type:** feature
+
+## Current State
+
+The codesub project exists as a Python CLI tool at `/Users/vlad/dev/projects/codesub` with the following architecture:
+
+**Core Components:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/models.py` - Defines data models including:
+  - `Subscription` - Contains id, path, start_line, end_line, label, description, anchors, active status, timestamps
+  - `Config` - Contains schema_version, repo config (baseline_ref), and list of subscriptions
+  - `Anchor` - Contains context lines before/after subscriptions
+  - Various detection models (Trigger, Proposal, ScanResult)
+
+- `/Users/vlad/dev/projects/codesub/src/codesub/config_store.py` - `ConfigStore` class that manages JSON storage at `.codesub/subscriptions.json`:
+  - `load()` - Read config from disk
+  - `save()` - Write config atomically
+  - `add_subscription()` - Add new subscription
+  - `list_subscriptions()` - List subscriptions with optional filtering
+  - `get_subscription()` - Get by ID (supports partial ID matching)
+  - `remove_subscription()` - Remove or deactivate subscription
+  - `update_subscription()` - Update existing subscription
+  - `get_baseline()` / `update_baseline()` - Manage baseline git ref
+
+- `/Users/vlad/dev/projects/codesub/src/codesub/cli.py` - CLI interface using argparse with commands:
+  - `init` - Initialize codesub in git repo
+  - `add` - Add subscription with location parsing (path:line or path:start-end)
+  - `list` - List with JSON/verbose/all flags
+  - `remove` - Remove with soft/hard delete options
+  - `scan` - Detect changes, generate updates
+  - `apply-updates` - Apply proposals from JSON
+
+**Current Interaction Model:**
+- All operations are command-line based
+- Configuration stored as JSON at `.codesub/subscriptions.json`
+- No API layer exists
+- No web interface exists
+- Output is CLI text or JSON to stdout
+
+**Storage Format:**
+```json
+{
+  "schema_version": 1,
+  "repo": {
+    "baseline_ref": "abc123...",
+    "created_at": "ISO8601",
+    "updated_at": "ISO8601"
+  },
+  "subscriptions": [
+    {
+      "id": "uuid",
+      "path": "src/file.py",
+      "start_line": 42,
+      "end_line": 50,
+      "label": "Important function",
+      "description": "Optional",
+      "active": true,
+      "anchors": {...},
+      "created_at": "ISO8601",
+      "updated_at": "ISO8601"
+    }
+  ]
+}
+```
+
+## Desired State
+
+A web-based frontend interface that allows users to create and manage subscriptions through a browser, providing a more intuitive and visual way to interact with the codesub tool compared to the CLI.
+
+**Functional Requirements:**
+The frontend should enable users to:
+1. View all subscriptions in a list/table format with filtering by active/inactive status
+2. View detailed information for a single subscription (path, line range, label, description, timestamps, anchor content)
+3. Create new subscriptions by specifying file path and line range
+4. Edit existing subscriptions (update label, description, line range)
+5. Delete subscriptions (soft deactivate or hard delete)
+6. See repository status (current baseline ref)
+
+**Non-Functional Requirements:**
+- The interface should be responsive and work on modern browsers
+- The interface should provide feedback for successful/failed operations
+- The interface should validate input (file paths, line ranges)
+
+## Constraints
+
+1. **Existing Data Structure** - Must work with the existing JSON config format at `.codesub/subscriptions.json` (schema version 1)
+2. **Repository Context** - Must operate within a git repository where codesub has been initialized (`codesub init`)
+3. **Python Backend** - The backend is Python-based; frontend needs to communicate with Python code
+4. **No Authentication** - This is a local development tool, no authentication/authorization system is needed initially
+5. **Git Integration** - Advanced features (scan, apply-updates) involve git operations and can be excluded from initial scope
+6. **File System Access** - Frontend needs to access local file system to validate paths and read file content
+
+## Acceptance Criteria
+
+- [ ] Users can view a list of all subscriptions with their key attributes (id, path, line range, label, status)
+- [ ] Users can filter subscriptions by active/inactive status
+- [ ] Users can click on a subscription to view full details including anchor content
+- [ ] Users can create a new subscription by providing path, start line, end line, optional label and description
+- [ ] Users can edit an existing subscription's label and description
+- [ ] Users can delete (deactivate) a subscription
+- [ ] Frontend validates input (non-empty paths, valid line numbers, start <= end)
+- [ ] Success/error messages are displayed for all operations
+- [ ] The frontend correctly reads from and writes to `.codesub/subscriptions.json`
+
+## Affected Areas
+
+- **New directories/files** - Frontend application (location to be determined)
+- **Backend integration layer** - API or bridge between frontend and existing Python code
+- **Configuration** - May need to add frontend-specific config
+- **Documentation** - Usage instructions for frontend
+
+## Questions
+
+1. **Architecture Decision**: Should this be:
+   - A local web server (e.g., Flask/FastAPI) serving both API and static frontend?
+   - A desktop application (Electron/Tauri)?
+   - A static HTML/JS frontend that calls Python backend directly?
+
+2. **Frontend Technology**: What framework/library is preferred?
+   - React, Vue, Svelte?
+   - Plain HTML/CSS/JavaScript?
+   - Framework that generates static sites?
+
+3. **Backend API Design**: Should we:
+   - Create a RESTful API layer (`api.py` module)?
+   - Expose CLI commands via HTTP endpoints?
+   - Use JSON-RPC or similar protocol?
+
+4. **Scope of File Browser**: For the "add subscription" feature:
+   - Should users browse files visually, or type paths manually?
+   - Should line content be displayed for reference when selecting ranges?
+   - Should there be git-aware file browsing (only files in baseline ref)?
+
+5. **Real-time vs Refresh**: Should the UI:
+   - Auto-refresh when `.codesub/subscriptions.json` changes externally?
+   - Only update on user action/manual refresh?
+
+## Out of Scope (for initial implementation)
+
+- **Advanced Scanning Features** - `scan` command functionality (detecting changes, proposals)
+- **Apply Updates** - `apply-updates` command functionality
+- **Git Operations** - Direct git integration, viewing diffs, baseline management
+- **Multi-repository Support** - Managing subscriptions across multiple repos
+- **Export/Import** - Bulk operations, backup/restore
+- **Authentication/Authorization** - User management, permissions
+- **Code Viewer** - Inline code display with syntax highlighting
+- **Anchor Visualization** - Graphical display of context lines
+- **Subscription Search** - Full-text search across labels/descriptions/paths
+- **Analytics/Statistics** - Usage metrics, change frequency tracking
+
+---
+
+**Key Files Referenced:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/models.py` - Data models
+- `/Users/vlad/dev/projects/codesub/src/codesub/config_store.py` - Storage layer
+- `/Users/vlad/dev/projects/codesub/src/codesub/cli.py` - Current CLI interface
+- `/Users/vlad/dev/projects/codesub/src/codesub/utils.py` - Utility functions (location parsing, formatting)
+- `/Users/vlad/dev/projects/codesub/.codesub/subscriptions.json` - Configuration storage location
+</file>
+
+<file path="src/codesub/cli.py">
+"""Command-line interface for codesub."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import __version__
+from .config_store import ConfigStore
+from .errors import CodesubError
+from .git_repo import GitRepo
+from .models import Anchor, Subscription
+from .utils import extract_anchors, format_subscription, parse_location
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Initialize codesub in the current repository."""
+    try:
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        # Resolve baseline ref
+        baseline = args.baseline or "HEAD"
+        baseline_hash = repo.resolve_ref(baseline)
+
+        config = store.init(baseline_hash, force=args.force)
+
+        print(f"Initialized codesub at {store.config_dir}")
+        print(f"Baseline: {baseline_hash[:12]} ({baseline})")
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Add a new subscription."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        # Parse location
+        path, start_line, end_line = parse_location(args.location)
+
+        # Validate file exists at baseline
+        baseline = config.repo.baseline_ref
+        lines = repo.show_file(baseline, path)
+
+        # Validate line range
+        if end_line > len(lines):
+            print(
+                f"Error: Line range {start_line}-{end_line} exceeds file length ({len(lines)} lines)",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Extract anchors
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, start_line, end_line, context=args.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        # Create subscription
+        sub = Subscription.create(
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            label=args.label,
+            description=args.desc,
+            anchors=anchors,
+        )
+
+        store.add_subscription(sub)
+
+        location = f"{path}:{start_line}" if start_line == end_line else f"{path}:{start_line}-{end_line}"
+        print(f"Added subscription: {sub.id[:8]}")
+        print(f"  Location: {location}")
+        if args.label:
+            print(f"  Label: {args.label}")
+        print(f"  Watching {end_line - start_line + 1} line(s)")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all subscriptions."""
+    try:
+        store, _ = get_store_and_repo()
+        config = store.load()
+
+        subs = config.subscriptions
+        if not args.all:
+            subs = [s for s in subs if s.active]
+
+        if not subs:
+            print("No subscriptions found.")
+            return 0
+
+        if args.json:
+            data = [s.to_dict() for s in subs]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Subscriptions ({len(subs)}):")
+            print(f"Baseline: {config.repo.baseline_ref[:12]}")
+            print()
+            for sub in subs:
+                print(format_subscription(sub, verbose=args.verbose))
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    """Remove a subscription."""
+    try:
+        store, _ = get_store_and_repo()
+
+        sub = store.remove_subscription(args.subscription_id, hard=args.hard)
+
+        action = "Removed" if args.hard else "Deactivated"
+        print(f"{action} subscription: {sub.id[:8]}")
+        if sub.label:
+            print(f"  Label: {sub.label}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Scan for changes and report triggered subscriptions."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        # Import detector here to avoid circular imports during module load
+        from .detector import Detector
+
+        # Resolve refs
+        base_ref = args.base or config.repo.baseline_ref
+        target_ref = repo.resolve_ref(args.target or "HEAD")
+        base_ref = repo.resolve_ref(base_ref)
+
+        if base_ref == target_ref:
+            print("Base and target refs are the same. No changes to scan.")
+            return 0
+
+        # Run detection
+        detector = Detector(repo)
+        result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+        # Output results
+        if args.json:
+            from .update_doc import result_to_dict
+            data = result_to_dict(result)
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Scan: {base_ref[:12]} -> {target_ref[:12]}")
+            print()
+
+            if result.triggers:
+                print(f"TRIGGERED ({len(result.triggers)}):")
+                for trigger in result.triggers:
+                    sub = trigger.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    location = f"{trigger.path}:{trigger.start_line}-{trigger.end_line}"
+                    reasons = ", ".join(trigger.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    Location: {location}")
+                    print(f"    Reason: {reasons}")
+                print()
+
+            if result.proposals:
+                print(f"PROPOSED UPDATES ({len(result.proposals)}):")
+                for prop in result.proposals:
+                    sub = prop.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    old_loc = f"{prop.old_path}:{prop.old_start}-{prop.old_end}"
+                    new_loc = f"{prop.new_path}:{prop.new_start}-{prop.new_end}"
+                    reasons = ", ".join(prop.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    {old_loc} -> {new_loc}")
+                    print(f"    Reason: {reasons}")
+                    if prop.shift:
+                        print(f"    Shift: {prop.shift:+d}")
+                print()
+
+            if result.unchanged:
+                print(f"UNCHANGED ({len(result.unchanged)}):")
+                for sub in result.unchanged:
+                    label = f" [{sub.label}]" if sub.label else ""
+                    print(f"  {sub.id[:8]}{label}")
+                print()
+
+        # Write update documents if requested
+        if args.write_updates:
+            from .update_doc import write_update_doc
+            write_update_doc(result, args.write_updates)
+            print(f"Wrote update document: {args.write_updates}")
+
+        if args.write_md:
+            from .update_doc import write_markdown_doc
+            write_markdown_doc(result, args.write_md)
+            print(f"Wrote markdown summary: {args.write_md}")
+
+        # Exit code
+        if args.fail_on_trigger and result.triggers:
+            return 2
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_apply_updates(args: argparse.Namespace) -> int:
+    """Apply update proposals from an update document."""
+    try:
+        store, repo = get_store_and_repo()
+
+        from .updater import Updater
+
+        updater = Updater(store, repo)
+
+        # Load update document
+        with open(args.update_doc, "r", encoding="utf-8") as f:
+            update_data = json.load(f)
+
+        if args.dry_run:
+            print("Dry run - no changes will be made")
+            print()
+
+        applied, warnings = updater.apply(update_data, dry_run=args.dry_run)
+
+        if warnings:
+            print("Warnings:")
+            for warning in warnings:
+                print(f"  {warning}")
+            print()
+
+        if applied:
+            print(f"Applied {len(applied)} update(s):")
+            for sub_id in applied:
+                print(f"  {sub_id[:8]}")
+        else:
+            print("No updates applied.")
+
+        if not args.dry_run and applied:
+            target_ref = update_data.get("target_ref", "")
+            print(f"\nBaseline updated to: {target_ref[:12]}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"Error: Update document not found: {args.update_doc}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in update document: {e}", file=sys.stderr)
+        return 1
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="codesub",
+        description="Subscribe to file line ranges and detect changes via git diff.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # init
+    init_parser = subparsers.add_parser("init", help="Initialize codesub in the repository")
+    init_parser.add_argument(
+        "--baseline", "-b", help="Baseline ref (default: HEAD)"
+    )
+    init_parser.add_argument(
+        "--force", "-f", action="store_true", help="Overwrite existing config"
+    )
+
+    # add
+    add_parser = subparsers.add_parser("add", help="Add a new subscription")
+    add_parser.add_argument(
+        "location", help="Location to subscribe to (path:line or path:start-end)"
+    )
+    add_parser.add_argument("--label", "-l", help="Label for the subscription")
+    add_parser.add_argument("--desc", "-d", help="Description")
+    add_parser.add_argument(
+        "--context", "-c", type=int, default=2,
+        help="Number of context lines for anchors (default: 2)"
+    )
+
+    # list
+    list_parser = subparsers.add_parser("list", help="List subscriptions")
+    list_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    list_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show detailed info including anchors"
+    )
+    list_parser.add_argument(
+        "--all", "-a", action="store_true", help="Include inactive subscriptions"
+    )
+
+    # remove
+    remove_parser = subparsers.add_parser("remove", help="Remove a subscription")
+    remove_parser.add_argument("subscription_id", help="Subscription ID (or prefix)")
+    remove_parser.add_argument(
+        "--hard", action="store_true", help="Delete entirely (default: deactivate)"
+    )
+
+    # scan
+    scan_parser = subparsers.add_parser(
+        "scan", help="Scan for changes and report triggered subscriptions"
+    )
+    scan_parser.add_argument(
+        "--base", "-b", help="Base ref (default: config baseline)"
+    )
+    scan_parser.add_argument(
+        "--target", "-t", help="Target ref (default: HEAD)"
+    )
+    scan_parser.add_argument(
+        "--write-updates", "-w", help="Write JSON update document to path"
+    )
+    scan_parser.add_argument(
+        "--write-md", "-m", help="Write markdown summary to path"
+    )
+    scan_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    scan_parser.add_argument(
+        "--fail-on-trigger", action="store_true",
+        help="Exit with code 2 if any subscriptions are triggered"
+    )
+
+    # apply-updates
+    apply_parser = subparsers.add_parser(
+        "apply-updates", help="Apply update proposals from an update document"
+    )
+    apply_parser.add_argument("update_doc", help="Path to update document JSON")
+    apply_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done without applying"
+    )
+
+    return parser
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    commands = {
+        "init": cmd_init,
+        "add": cmd_add,
+        "list": cmd_list,
+        "remove": cmd_remove,
+        "scan": cmd_scan,
+        "apply-updates": cmd_apply_updates,
+    }
+
+    cmd_func = commands.get(args.command)
+    if cmd_func:
+        return cmd_func(args)
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+</file>
+
+<file path="src/codesub/config_store.py">
+"""Configuration storage for codesub."""
+
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from .errors import (
+    ConfigExistsError,
+    ConfigNotFoundError,
+    InvalidSchemaVersionError,
+    SubscriptionNotFoundError,
+)
+from .models import Config, Subscription, _utc_now
+
+SCHEMA_VERSION = 1
+CONFIG_DIR = ".codesub"
+CONFIG_FILE = "subscriptions.json"
+UPDATE_DOCS_DIR = "last_update_docs"
+
+
+class ConfigStore:
+    """Manages reading and writing the subscription configuration."""
+
+    def __init__(self, repo_root: Path):
+        """
+        Initialize ConfigStore.
+
+        Args:
+            repo_root: Path to the repository root directory.
+        """
+        self.repo_root = repo_root
+        self.config_dir = repo_root / CONFIG_DIR
+        self.config_path = self.config_dir / CONFIG_FILE
+        self.update_docs_dir = self.config_dir / UPDATE_DOCS_DIR
+
+    def exists(self) -> bool:
+        """Check if config file exists."""
+        return self.config_path.exists()
+
+    def load(self) -> Config:
+        """
+        Load configuration from disk.
+
+        Raises:
+            ConfigNotFoundError: If config doesn't exist.
+            InvalidSchemaVersionError: If schema version is unsupported.
+        """
+        if not self.exists():
+            raise ConfigNotFoundError(str(self.config_path))
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        version = data.get("schema_version", 0)
+        if version != SCHEMA_VERSION:
+            raise InvalidSchemaVersionError(version, SCHEMA_VERSION)
+
+        return Config.from_dict(data)
+
+    def save(self, config: Config) -> None:
+        """
+        Save configuration to disk atomically.
+
+        Uses write-to-temp-then-rename for atomicity.
+        """
+        # Ensure config directory exists
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+
+        # Update the updated_at timestamp
+        config.repo.updated_at = _utc_now()
+
+        # Write to temp file then rename (atomic on POSIX)
+        data = config.to_dict()
+        fd, temp_path = tempfile.mkstemp(
+            dir=self.config_dir, prefix=".subscriptions_", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")  # trailing newline
+            os.replace(temp_path, self.config_path)
+        except Exception:
+            # Clean up temp file on failure (ignore errors if already removed)
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+
+    def init(self, baseline_ref: str, force: bool = False) -> Config:
+        """
+        Initialize a new configuration.
+
+        Args:
+            baseline_ref: The baseline git ref (usually HEAD).
+            force: If True, overwrite existing config.
+
+        Returns:
+            The created Config.
+
+        Raises:
+            ConfigExistsError: If config exists and force=False.
+        """
+        if self.exists() and not force:
+            raise ConfigExistsError(str(self.config_path))
+
+        config = Config.create(baseline_ref)
+        self.save(config)
+
+        # Create update docs directory
+        self.update_docs_dir.mkdir(parents=True, exist_ok=True)
+
+        return config
+
+    def add_subscription(self, sub: Subscription) -> None:
+        """Add a subscription to the config."""
+        config = self.load()
+        config.subscriptions.append(sub)
+        self.save(config)
+
+    def list_subscriptions(self, include_inactive: bool = False) -> list[Subscription]:
+        """
+        List all subscriptions.
+
+        Args:
+            include_inactive: If True, include inactive subscriptions.
+        """
+        config = self.load()
+        if include_inactive:
+            return config.subscriptions
+        return [s for s in config.subscriptions if s.active]
+
+    def get_subscription(self, sub_id: str) -> Subscription:
+        """
+        Get a subscription by ID (supports partial ID matching).
+
+        Raises:
+            SubscriptionNotFoundError: If subscription doesn't exist.
+        """
+        config = self.load()
+        matches = [s for s in config.subscriptions if s.id.startswith(sub_id)]
+
+        if not matches:
+            raise SubscriptionNotFoundError(sub_id)
+        if len(matches) > 1:
+            raise SubscriptionNotFoundError(
+                f"{sub_id} (ambiguous, matches {len(matches)} subscriptions)"
+            )
+
+        return matches[0]
+
+    def remove_subscription(self, sub_id: str, hard: bool = False) -> Subscription:
+        """
+        Remove or deactivate a subscription.
+
+        Args:
+            sub_id: Subscription ID (or prefix).
+            hard: If True, delete entirely. If False, set active=False.
+
+        Returns:
+            The removed/deactivated subscription.
+
+        Raises:
+            SubscriptionNotFoundError: If subscription doesn't exist.
+        """
+        config = self.load()
+        matches = [(i, s) for i, s in enumerate(config.subscriptions) if s.id.startswith(sub_id)]
+
+        if not matches:
+            raise SubscriptionNotFoundError(sub_id)
+        if len(matches) > 1:
+            raise SubscriptionNotFoundError(
+                f"{sub_id} (ambiguous, matches {len(matches)} subscriptions)"
+            )
+
+        idx, sub = matches[0]
+
+        if hard:
+            config.subscriptions.pop(idx)
+        else:
+            sub.active = False
+            sub.updated_at = _utc_now()
+
+        self.save(config)
+        return sub
+
+    def update_subscription(self, sub: Subscription) -> None:
+        """
+        Update an existing subscription.
+
+        Raises:
+            SubscriptionNotFoundError: If subscription doesn't exist.
+        """
+        config = self.load()
+        for i, existing in enumerate(config.subscriptions):
+            if existing.id == sub.id:
+                sub.updated_at = _utc_now()
+                config.subscriptions[i] = sub
+                self.save(config)
+                return
+
+        raise SubscriptionNotFoundError(sub.id)
+
+    def update_baseline(self, new_ref: str) -> None:
+        """Update the baseline ref."""
+        config = self.load()
+        config.repo.baseline_ref = new_ref
+        self.save(config)
+
+    def get_baseline(self) -> str:
+        """Get the current baseline ref."""
+        config = self.load()
+        return config.repo.baseline_ref
+</file>
+
+<file path="src/codesub/errors.py">
+"""Custom exceptions for codesub."""
+
+
+class CodesubError(Exception):
+    """Base exception for all codesub errors."""
+
+    pass
+
+
+class ConfigNotFoundError(CodesubError):
+    """Raised when .codesub/subscriptions.json doesn't exist."""
+
+    def __init__(self, path: str | None = None):
+        self.path = path
+        msg = "Config not initialized. Run 'codesub init' first."
+        if path:
+            msg = f"Config not found at {path}. Run 'codesub init' first."
+        super().__init__(msg)
+
+
+class ConfigExistsError(CodesubError):
+    """Raised when trying to init but config already exists."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Config already exists at {path}. Use --force to overwrite.")
+
+
+class InvalidSchemaVersionError(CodesubError):
+    """Raised when config has an unsupported schema version."""
+
+    def __init__(self, found: int, supported: int):
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"Unsupported schema version {found}. This tool supports version {supported}."
+        )
+
+
+class SubscriptionNotFoundError(CodesubError):
+    """Raised when a subscription ID doesn't exist."""
+
+    def __init__(self, sub_id: str):
+        self.sub_id = sub_id
+        super().__init__(f"Subscription not found: {sub_id}")
+
+
+class InvalidLocationError(CodesubError):
+    """Raised when a location spec is invalid."""
+
+    def __init__(self, location: str, reason: str | None = None):
+        self.location = location
+        msg = f"Invalid location: {location}"
+        if reason:
+            msg = f"{msg} ({reason})"
+        super().__init__(msg)
+
+
+class FileNotFoundAtRefError(CodesubError):
+    """Raised when a file doesn't exist at the specified git ref."""
+
+    def __init__(self, path: str, ref: str):
+        self.path = path
+        self.ref = ref
+        super().__init__(f"File '{path}' not found at ref '{ref}'")
+
+
+class GitError(CodesubError):
+    """Raised when a git operation fails."""
+
+    def __init__(self, command: str, stderr: str):
+        self.command = command
+        self.stderr = stderr
+        super().__init__(f"Git command failed: {command}\n{stderr}")
+
+
+class NotAGitRepoError(CodesubError):
+    """Raised when not inside a git repository."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Not a git repository: {path}")
+
+
+class InvalidLineRangeError(CodesubError):
+    """Raised when line range is invalid."""
+
+    def __init__(self, start: int, end: int, reason: str):
+        self.start = start
+        self.end = end
+        super().__init__(f"Invalid line range {start}-{end}: {reason}")
+</file>
+
+<file path="src/codesub/git_repo.py">
+"""Git repository wrapper for codesub."""
+
+import subprocess
+from pathlib import Path
+
+from .errors import FileNotFoundAtRefError, GitError, NotAGitRepoError
+from .utils import normalize_path
+
+
+class GitRepo:
+    """Wrapper for git operations."""
+
+    def __init__(self, start_dir: str | Path = "."):
+        """
+        Initialize GitRepo by finding the repository root.
+
+        Args:
+            start_dir: Directory to start searching from.
+
+        Raises:
+            NotAGitRepoError: If not inside a git repository.
+        """
+        self._start_dir = Path(start_dir).resolve()
+        self._root: Path | None = None
+
+    @property
+    def root(self) -> Path:
+        """Get the repository root directory (cached)."""
+        if self._root is None:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self._start_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise NotAGitRepoError(str(self._start_dir))
+            self._root = Path(result.stdout.strip())
+        return self._root
+
+    def head(self) -> str:
+        """Get the current HEAD commit hash."""
+        return self.resolve_ref("HEAD")
+
+    def resolve_ref(self, ref: str) -> str:
+        """
+        Resolve a git ref to a full commit hash.
+
+        Args:
+            ref: Git ref (e.g., "HEAD", "main", commit hash).
+
+        Returns:
+            Full commit hash.
+
+        Raises:
+            GitError: If ref cannot be resolved.
+        """
+        result = subprocess.run(
+            ["git", "rev-parse", ref],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git rev-parse {ref}", result.stderr.strip())
+        return result.stdout.strip()
+
+    def show_file(self, ref: str, path: str) -> list[str]:
+        """
+        Get file content at a specific ref.
+
+        Args:
+            ref: Git ref (commit hash, branch name, etc.).
+            path: Repo-relative path to the file.
+
+        Returns:
+            List of lines (without trailing newlines).
+
+        Raises:
+            FileNotFoundAtRefError: If file doesn't exist at ref.
+            GitError: If git command fails for other reasons.
+        """
+        path = normalize_path(path)
+        result = subprocess.run(
+            ["git", "show", f"{ref}:{path}"],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "does not exist" in stderr or "exists on disk" in stderr:
+                raise FileNotFoundAtRefError(path, ref)
+            raise GitError(f"git show {ref}:{path}", stderr)
+
+        # Split into lines, preserving empty lines but removing trailing newline
+        content = result.stdout
+        if content.endswith("\n"):
+            content = content[:-1]
+        if not content:
+            return []
+        return content.split("\n")
+
+    def diff_patch(self, base: str, target: str) -> str:
+        """
+        Get unified diff between two refs.
+
+        Uses -U0 for minimal context (just hunks).
+
+        Args:
+            base: Base ref.
+            target: Target ref.
+
+        Returns:
+            Diff text (may be empty if no changes).
+        """
+        result = subprocess.run(
+            ["git", "diff", "-U0", "--find-renames", base, target],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {base} {target}", result.stderr.strip())
+        return result.stdout
+
+    def diff_name_status(self, base: str, target: str) -> str:
+        """
+        Get name-status diff between two refs for rename detection.
+
+        Args:
+            base: Base ref.
+            target: Target ref.
+
+        Returns:
+            Name-status output text.
+        """
+        result = subprocess.run(
+            ["git", "diff", "--name-status", "-M", "--find-renames", base, target],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff --name-status {base} {target}", result.stderr.strip())
+        return result.stdout
+
+    def file_line_count(self, ref: str, path: str) -> int:
+        """Get the number of lines in a file at a ref."""
+        lines = self.show_file(ref, path)
+        return len(lines)
+
+    def relative_path(self, abs_path: str | Path) -> str:
+        """
+        Convert an absolute path to a repo-relative path.
+
+        Args:
+            abs_path: Absolute or relative path.
+
+        Returns:
+            Repo-relative POSIX path.
+        """
+        path = Path(abs_path).resolve()
+        try:
+            rel = path.relative_to(self.root)
+            return normalize_path(str(rel))
+        except ValueError:
+            # Path is not inside repo, return as-is normalized
+            return normalize_path(str(path))
+</file>
+
+<file path="src/codesub/models.py">
+"""Data models for codesub."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+import uuid
+
+
+def _utc_now() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _generate_id() -> str:
+    """Generate a new subscription ID."""
+    return str(uuid.uuid4())
+
+
+@dataclass
+class Anchor:
+    """Context lines around a subscription for display and future fuzzy matching."""
+
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_before": self.context_before,
+            "lines": self.lines,
+            "context_after": self.context_after,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Anchor":
+        return cls(
+            context_before=data.get("context_before", []),
+            lines=data.get("lines", []),
+            context_after=data.get("context_after", []),
+        )
+
+
+@dataclass
+class Subscription:
+    """A subscription to a file line range."""
+
+    id: str
+    path: str  # repo-relative, POSIX-style
+    start_line: int  # 1-based inclusive
+    end_line: int  # 1-based inclusive
+    label: str | None = None
+    description: str | None = None
+    anchors: Anchor | None = None
+    active: bool = True
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "id": self.id,
+            "path": self.path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "active": self.active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+        if self.label is not None:
+            result["label"] = self.label
+        if self.description is not None:
+            result["description"] = self.description
+        if self.anchors is not None:
+            result["anchors"] = self.anchors.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Subscription":
+        anchors = None
+        if "anchors" in data:
+            anchors = Anchor.from_dict(data["anchors"])
+        return cls(
+            id=data["id"],
+            path=data["path"],
+            start_line=data["start_line"],
+            end_line=data["end_line"],
+            label=data.get("label"),
+            description=data.get("description"),
+            anchors=anchors,
+            active=data.get("active", True),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        path: str,
+        start_line: int,
+        end_line: int,
+        label: str | None = None,
+        description: str | None = None,
+        anchors: Anchor | None = None,
+    ) -> "Subscription":
+        """Create a new subscription with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            label=label,
+            description=description,
+            anchors=anchors,
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class RepoConfig:
+    """Repository-level configuration."""
+
+    baseline_ref: str
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "baseline_ref": self.baseline_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RepoConfig":
+        return cls(
+            baseline_ref=data["baseline_ref"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+
+@dataclass
+class Config:
+    """Full configuration containing repo config and subscriptions."""
+
+    schema_version: int
+    repo: RepoConfig
+    subscriptions: list[Subscription]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repo": self.repo.to_dict(),
+            "subscriptions": [s.to_dict() for s in self.subscriptions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Config":
+        return cls(
+            schema_version=data["schema_version"],
+            repo=RepoConfig.from_dict(data["repo"]),
+            subscriptions=[Subscription.from_dict(s) for s in data.get("subscriptions", [])],
+        )
+
+    @classmethod
+    def create(cls, baseline_ref: str) -> "Config":
+        """Create a new config with the given baseline ref."""
+        return cls(
+            schema_version=1,
+            repo=RepoConfig(baseline_ref=baseline_ref),
+            subscriptions=[],
+        )
+
+
+# Models for diff parsing
+
+
+@dataclass
+class Hunk:
+    """A single hunk from a unified diff."""
+
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+
+
+@dataclass
+class FileDiff:
+    """Diff information for a single file."""
+
+    old_path: str
+    new_path: str
+    hunks: list[Hunk]
+    is_rename: bool = False
+    is_new_file: bool = False
+    is_deleted_file: bool = False
+
+
+# Models for detection results
+
+
+@dataclass
+class Trigger:
+    """A subscription that was triggered by changes."""
+
+    subscription_id: str
+    subscription: Subscription
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range"]
+    matching_hunks: list[Hunk]
+
+
+@dataclass
+class Proposal:
+    """A proposed update to a subscription (rename or line shift)."""
+
+    subscription_id: str
+    subscription: Subscription
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]  # ["rename", "line_shift"]
+    confidence: str = "high"  # "high" for POC (math-based)
+    shift: int | None = None
+
+
+@dataclass
+class ScanResult:
+    """Result of scanning for changes."""
+
+    base_ref: str
+    target_ref: str
+    triggers: list[Trigger]
+    proposals: list[Proposal]
+    unchanged: list[Subscription]  # Subscriptions with no changes or shifts
+</file>
+
+<file path="src/codesub/utils.py">
+"""Utility functions for codesub."""
+
+import re
+from pathlib import Path
+
+from .errors import InvalidLocationError, InvalidLineRangeError
+
+
+def parse_location(location: str) -> tuple[str, int, int]:
+    """
+    Parse a location spec into (path, start_line, end_line).
+
+    Formats:
+    - path/to/file:42 (single line)
+    - path/to/file:42-45 (range)
+
+    Returns:
+        Tuple of (path, start_line, end_line), all 1-based inclusive.
+
+    Raises:
+        InvalidLocationError: If the location format is invalid.
+        InvalidLineRangeError: If the line range is invalid.
+    """
+    # Match path:line or path:start-end
+    match = re.match(r"^(.+):(\d+)(?:-(\d+))?$", location)
+    if not match:
+        raise InvalidLocationError(
+            location, "expected format 'path:line' or 'path:start-end'"
+        )
+
+    path = match.group(1)
+    start = int(match.group(2))
+    end = int(match.group(3)) if match.group(3) else start
+
+    if start < 1:
+        raise InvalidLineRangeError(start, end, "start line must be >= 1")
+    if end < start:
+        raise InvalidLineRangeError(start, end, "end line must be >= start line")
+
+    # Normalize path to POSIX style
+    path = Path(path).as_posix()
+
+    return path, start, end
+
+
+def normalize_path(path: str) -> str:
+    """Normalize a path to POSIX style (forward slashes)."""
+    return Path(path).as_posix()
+
+
+def extract_anchors(
+    lines: list[str], start_line: int, end_line: int, context: int = 2
+) -> tuple[list[str], list[str], list[str]]:
+    """
+    Extract anchor lines from file content.
+
+    Args:
+        lines: All lines of the file (0-indexed list).
+        start_line: 1-based inclusive start line.
+        end_line: 1-based inclusive end line.
+        context: Number of context lines before/after.
+
+    Returns:
+        Tuple of (context_before, watched_lines, context_after).
+    """
+    # Convert to 0-based indices
+    start_idx = start_line - 1
+    end_idx = end_line  # exclusive for slicing
+
+    # Extract watched lines
+    watched = lines[start_idx:end_idx]
+
+    # Extract context before
+    ctx_before_start = max(0, start_idx - context)
+    ctx_before = lines[ctx_before_start:start_idx]
+
+    # Extract context after
+    ctx_after_end = min(len(lines), end_idx + context)
+    ctx_after = lines[end_idx:ctx_after_end]
+
+    return ctx_before, watched, ctx_after
+
+
+def format_subscription(sub: "Subscription", verbose: bool = False) -> str:
+    """Format a subscription for display."""
+    # Import here to avoid circular import
+    from .models import Subscription
+
+    status = "active" if sub.active else "inactive"
+    label_str = f" [{sub.label}]" if sub.label else ""
+    location = f"{sub.path}:{sub.start_line}"
+    if sub.end_line != sub.start_line:
+        location = f"{sub.path}:{sub.start_line}-{sub.end_line}"
+
+    result = f"{sub.id[:8]}  {location}{label_str} ({status})"
+
+    if verbose:
+        if sub.description:
+            result += f"\n         Description: {sub.description}"
+        if sub.anchors:
+            result += "\n         Lines:"
+            for line in sub.anchors.lines:
+                # Truncate long lines
+                display_line = line[:60] + "..." if len(line) > 60 else line
+                result += f"\n           | {display_line}"
+
+    return result
+
+
+def truncate_id(sub_id: str) -> str:
+    """Truncate a subscription ID for display."""
+    return sub_id[:8]
+</file>
+
+<file path="pyproject.toml">
+[tool.poetry]
+name = "codesub"
+version = "0.1.0"
+description = "Subscribe to file line ranges and detect changes via git diff"
+authors = ["Developer"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "codesub", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0"
+pytest-cov = ">=4.0"
+
+[tool.poetry.scripts]
+codesub = "codesub.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+</file>
+
+</files>

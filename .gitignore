@@ -52,7 +52,6 @@ htmlcov/
 
 # Task runner
 .task/
-tasks/
 
 # Claude Code local settings
 .claude/

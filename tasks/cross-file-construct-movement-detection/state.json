@@ -1,0 +1,11 @@
+{
+  "task_name": "cross-file-construct-movement-detection",
+  "current_phase": 5,
+  "completed_phases": [1, 2, 3, 4, 5],
+  "external_review": "incorporated",
+  "implementation_status": "complete",
+  "tests_passing": true,
+  "tests_added": 21,
+  "total_tests": 246,
+  "updated_at": "2026-01-28T00:00:00Z"
+}
