@@ -188,3 +188,48 @@ export interface FilesystemBrowseResponse {
   parent_path: string | null;
   entries: FilesystemEntry[];
 }
+
+// Code browser types
+export interface FileEntry {
+  path: string;
+  name: string;
+  extension: string;
+}
+
+export interface FileListResponse {
+  files: FileEntry[];
+  total: number;
+  has_more: boolean;
+}
+
+export interface FileContentResponse {
+  path: string;
+  total_lines: number;
+  lines: string[];
+  language: string | null;
+  supports_semantic: boolean;
+  truncated: boolean;
+}
+
+export interface ConstructInfo {
+  kind: string;
+  qualname: string;
+  role: string | null;
+  start_line: number;
+  end_line: number;
+  target: string;
+}
+
+export interface SymbolsResponse {
+  path: string;
+  language: string;
+  constructs: ConstructInfo[];
+  has_parse_error: boolean;
+  error_message?: string;
+}
+
+export interface CodeBrowserSelection {
+  type: 'semantic' | 'lines';
+  location: string;
+  label?: string;
+}

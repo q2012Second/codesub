@@ -125,6 +125,32 @@ class GitRepo:
             return []
         return content.split("\n")
 
+    def list_files(self, ref: str) -> list[str]:
+        """
+        List all tracked files at a specific ref.
+
+        Args:
+            ref: Git ref (commit hash, branch name, etc.).
+
+        Returns:
+            List of repo-relative file paths (excludes submodules).
+
+        Raises:
+            GitError: If git command fails.
+        """
+        result = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", ref],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git ls-tree {ref}", result.stderr.strip())
+
+        if not result.stdout.strip():
+            return []
+        return result.stdout.strip().split("\n")
+
     def diff_patch(self, base: str, target: str | None = None) -> str:
         """
         Get unified diff between two refs, or between a ref and working directory.

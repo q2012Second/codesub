@@ -227,6 +227,69 @@ class FilesystemBrowseResponse(BaseModel):
     entries: list[FilesystemEntry]
 
 
+# --- Code Browser Schemas ---
+
+
+class FileEntry(BaseModel):
+    """A file in the repository."""
+    path: str  # Repo-relative path (e.g., "src/codesub/api.py")
+    name: str  # Filename only (e.g., "api.py")
+    extension: str  # File extension (e.g., ".py")
+
+
+class FileListResponse(BaseModel):
+    """Response for file listing."""
+    files: list[FileEntry]
+    total: int
+    has_more: bool
+
+
+class FileContentResponse(BaseModel):
+    """Response for file content."""
+    path: str
+    total_lines: int
+    lines: list[str]  # Line contents (frontend adds line numbers)
+    language: Optional[str] = None
+    supports_semantic: bool = False
+    truncated: bool = False
+
+
+class ConstructSchema(BaseModel):
+    """A semantic construct in the file."""
+    kind: str
+    qualname: str
+    role: Optional[str] = None
+    start_line: int
+    end_line: int
+    target: str  # Ready-to-use location string
+
+
+class SymbolsResponse(BaseModel):
+    """Response for file symbols."""
+    path: str
+    language: str
+    constructs: list[ConstructSchema]
+    has_parse_error: bool = False
+    error_message: Optional[str] = None
+
+
+# --- Code Browser Cache ---
+
+# Cache file lists per (project_id, baseline_ref) for 60 seconds
+_file_list_cache: dict[tuple[str, str], tuple[list[str], float]] = {}
+_FILE_LIST_CACHE_TTL = 60.0
+
+# Common code/text file extensions
+TEXT_EXTENSIONS = {
+    ".py", ".java", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".php",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala", ".clj",
+    ".html", ".css", ".scss", ".sass", ".less", ".json", ".yaml", ".yml",
+    ".xml", ".toml", ".ini", ".cfg", ".conf", ".md", ".txt", ".rst", ".sql",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+    ".dockerfile", ".vue", ".svelte", ".astro", ".prisma", ".graphql",
+}
+
+
 # --- Helper Functions ---
 
 
@@ -920,4 +983,190 @@ def browse_filesystem(path: str = Query(default="~", description="Path to browse
         current_path=str(expanded),
         parent_path=parent_path,
         entries=entries,
+    )
+
+
+# --- Code Browser Endpoints ---
+
+
+def _get_cached_file_list(project_id: str, baseline: str, repo: GitRepo) -> list[str]:
+    """Get file list from cache or fetch from git."""
+    from time import time
+    cache_key = (project_id, baseline)
+    now = time()
+
+    if cache_key in _file_list_cache:
+        files, cached_at = _file_list_cache[cache_key]
+        if now - cached_at < _FILE_LIST_CACHE_TTL:
+            return files
+
+    files = repo.list_files(baseline)
+    _file_list_cache[cache_key] = (files, now)
+    return files
+
+
+MAX_FILE_LINES = 5000  # Hard limit for browser display
+
+
+@app.get("/api/projects/{project_id}/files", response_model=FileListResponse)
+def list_project_files(
+    project_id: str,
+    search: Optional[str] = Query(None, description="Filter by path substring"),
+    extensions: Optional[str] = Query(None, description="Comma-separated extensions (e.g., '.py,.java')"),
+    text_only: bool = Query(default=True, description="Only show common text/code files"),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    List git-tracked files in a project at the baseline ref.
+
+    By default, filters to common code/text file extensions.
+    Results are sorted alphabetically by path.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get cached file list
+    files = _get_cached_file_list(project_id, baseline, repo)
+
+    # Apply text_only filter (default)
+    if text_only and not extensions:
+        files = [f for f in files if Path(f).suffix.lower() in TEXT_EXTENSIONS]
+
+    # Apply extension filter if specified
+    if extensions:
+        ext_list = [e.strip().lower() for e in extensions.split(",")]
+        ext_list = ["." + e if not e.startswith(".") else e for e in ext_list]
+        files = [f for f in files if Path(f).suffix.lower() in ext_list]
+
+    # Apply search filter
+    if search:
+        search_lower = search.lower()
+        files = [f for f in files if search_lower in f.lower()]
+
+    # Sort and paginate
+    files.sort()
+    total = len(files)
+    paginated = files[offset:offset + limit]
+
+    return FileListResponse(
+        files=[
+            FileEntry(
+                path=f,
+                name=Path(f).name,
+                extension=Path(f).suffix.lower(),
+            )
+            for f in paginated
+        ],
+        total=total,
+        has_more=(offset + len(paginated)) < total,
+    )
+
+
+@app.get("/api/projects/{project_id}/file-content", response_model=FileContentResponse)
+def get_project_file_content(
+    project_id: str,
+    path: str = Query(..., description="Repo-relative file path"),
+):
+    """
+    Get file content at the project's baseline ref.
+
+    Returns up to 5000 lines. Files larger than this are truncated with a warning.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get file content
+    try:
+        all_lines = repo.show_file(baseline, path)
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Cannot display binary or non-UTF8 file: {path}"
+        )
+
+    total_lines = len(all_lines)
+    truncated = total_lines > MAX_FILE_LINES
+    lines = all_lines[:MAX_FILE_LINES] if truncated else all_lines
+
+    # Detect language support
+    from .semantic import get_indexer_for_path
+    language = None
+    supports_semantic = False
+    try:
+        language, _ = get_indexer_for_path(path)
+        supports_semantic = True
+    except UnsupportedLanguageError:
+        pass
+
+    return FileContentResponse(
+        path=path,
+        total_lines=total_lines,
+        lines=lines,
+        language=language,
+        supports_semantic=supports_semantic,
+        truncated=truncated,
+    )
+
+
+@app.get("/api/projects/{project_id}/file-symbols", response_model=SymbolsResponse)
+def get_project_file_symbols(
+    project_id: str,
+    path: str = Query(..., description="Repo-relative file path"),
+    kind: Optional[str] = Query(None, description="Filter by construct kind"),
+):
+    """
+    Get semantic constructs in a file.
+
+    Only works for supported languages (Python, Java).
+    Returns all discoverable constructs with their line ranges.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get file content
+    lines = repo.show_file(baseline, path)
+    source = "\n".join(lines)
+
+    # Get indexer
+    from .semantic import get_indexer_for_path
+    language, indexer = get_indexer_for_path(path)
+
+    # Index file with error handling
+    try:
+        constructs = indexer.index_file(source, path)
+    except Exception as e:
+        return SymbolsResponse(
+            path=path,
+            language=language,
+            constructs=[],
+            has_parse_error=True,
+            error_message=f"Failed to parse file: {e}",
+        )
+
+    # Filter by kind if specified
+    if kind:
+        constructs = [c for c in constructs if c.kind == kind]
+
+    # Check for parse errors in constructs
+    has_parse_error = any(c.has_parse_error for c in constructs)
+
+    return SymbolsResponse(
+        path=path,
+        language=language,
+        constructs=[
+            ConstructSchema(
+                kind=c.kind,
+                qualname=c.qualname,
+                role=c.role,
+                start_line=c.start_line,
+                end_line=c.end_line,
+                target=f"{path}::{c.qualname}",
+            )
+            for c in constructs
+        ],
+        has_parse_error=has_parse_error,
     )

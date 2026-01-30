@@ -126,9 +126,31 @@ export default function App() {
     }
   };
 
+  // Validate restored project ID exists after projects load
+  useEffect(() => {
+    if (!projectLoading && currentProjectId) {
+      const projectExists = projects.some(p => p.id === currentProjectId);
+      if (!projectExists) {
+        // Project no longer exists, reset to projects view
+        const resetState: NavState = {
+          view: 'projects',
+          projectId: null,
+          subscriptionId: null,
+          scanId: null,
+        };
+        window.history.replaceState(resetState, '', window.location.pathname);
+        setNavState(resetState);
+      }
+    }
+  }, [projectLoading, projects, currentProjectId]);
+
   // Load subscriptions when project changes
   const fetchSubscriptions = useCallback(async () => {
     if (!currentProjectId) return;
+    // Don't fetch if projects haven't loaded yet
+    if (projectLoading) return;
+    // Don't fetch if project doesn't exist
+    if (!projects.some(p => p.id === currentProjectId)) return;
 
     try {
       setLoading(true);
@@ -142,7 +164,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [currentProjectId, filter]);
+  }, [currentProjectId, filter, projectLoading, projects]);
 
   useEffect(() => {
     if (currentProjectId) {

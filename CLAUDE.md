@@ -107,7 +107,7 @@ frontend/             # React + TypeScript frontend
 mock_repos/           # Mock repositories for testing
 ├── python/           # Python e-commerce API (run `task mock:init:python`)
 └── java/             # Java e-commerce API (run `task mock:init:java`)
-tests/                # Test suite (pytest, 225+ tests)
+tests/                # Test suite (pytest, 260+ tests)
 data/                 # Local server data (gitignored)
 ├── projects.json     # Registered projects
 └── scan_history/     # Scan results per project
@@ -202,6 +202,11 @@ Semantic subscriptions track code constructs by identity using Tree-sitter parsi
 - `GET /api/projects/{id}/scan-history/{scan_id}` - Get scan result
 - `DELETE /api/projects/{id}/scan-history` - Clear project history
 - `DELETE /api/scan-history` - Clear all history
+
+### Code Browser (for visual subscription creation)
+- `GET /api/projects/{id}/files` - List git-tracked files (with search, pagination)
+- `GET /api/projects/{id}/file-content?path=` - Get file content with lines
+- `GET /api/projects/{id}/file-symbols?path=` - Get semantic constructs in file
 
 ## Data Storage
 

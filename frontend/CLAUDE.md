@@ -34,12 +34,13 @@ src/
 ├── App.tsx              # Main app with view routing and project context
 ├── api.ts               # API client functions
 ├── types.ts             # TypeScript interfaces
+├── hooks.ts             # Custom hooks (useDebouncedValue)
 ├── main.tsx             # Entry point
 └── components/
     ├── StatusFilter.tsx       # Active/All filter toggle
     ├── SubscriptionList.tsx   # Subscription list view
     ├── SubscriptionDetail.tsx # Subscription detail with anchors
-    ├── SubscriptionForm.tsx   # Create/Edit subscription form
+    ├── SubscriptionForm.tsx   # Create/Edit subscription form (with Browse button)
     ├── ProjectList.tsx        # Project list view
     ├── ProjectForm.tsx        # Add project form (path input)
     ├── ProjectSelector.tsx    # Header dropdown for switching projects
@@ -48,7 +49,11 @@ src/
     ├── ScanDetailView.tsx     # View details of a specific past scan
     ├── ApplyUpdatesModal.tsx  # Confirmation dialog for applying proposals
     ├── TriggerCard.tsx        # Shared trigger display card
-    └── ProposalCard.tsx       # Shared proposal display card
+    ├── ProposalCard.tsx       # Shared proposal display card
+    ├── CodeBrowserModal.tsx   # Modal for browsing project files and selecting code
+    ├── FileListPanel.tsx      # File tree browser with folder collapsing
+    ├── CodeViewerPanel.tsx    # Code viewer with line/construct selection
+    └── FileBrowserModal.tsx   # Filesystem browser for project path selection
 ```
 
 ## Views
@@ -100,6 +105,13 @@ All API calls go through `api.ts`. Base URL: `/api` (proxied to backend in dev).
 | `clearProjectScanHistory(projectId)` | `/api/projects/:id/scan-history` | DELETE |
 | `clearAllScanHistory()` | `/api/scan-history` | DELETE |
 | `applyUpdates(projectId, proposalIds)` | `/api/projects/:id/apply-updates` | POST |
+
+### Code Browser APIs
+| Function | Endpoint | Method |
+|----------|----------|--------|
+| `listProjectFiles(projectId, options)` | `/api/projects/:id/files` | GET |
+| `getProjectFileContent(projectId, path)` | `/api/projects/:id/file-content` | GET |
+| `getProjectFileSymbols(projectId, path)` | `/api/projects/:id/file-symbols` | GET |
 
 ## Key Types (types.ts)
 
@@ -157,3 +169,8 @@ interface ScanHistoryEntry {
 3. **Scan functionality** - Run scans against different git refs (HEAD~1, baseline, custom)
 4. **Apply updates** - Apply proposals from scan results with confirmation dialog
 5. **Scan history** - View past scans with summaries, clear history
+6. **Visual code browser** - Browse files and select code visually when creating subscriptions:
+   - Folder tree with collapsed single-child paths (e.g., `src/java/repo`)
+   - Expand/collapse folders, search files
+   - Code viewer with line selection (click/drag line numbers)
+   - Semantic construct selection (click highlighted variables/fields/methods)

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest } from '../types';
+import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest, CodeBrowserSelection } from '../types';
 import { createProjectSubscription, updateProjectSubscription } from '../api';
+import { CodeBrowserModal } from './CodeBrowserModal';
 
 interface Props {
   subscription: Subscription | null;  // null = create mode
@@ -19,6 +20,15 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
   const [context, setContext] = useState(2);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showBrowser, setShowBrowser] = useState(false);
+
+  const handleBrowserSelect = (selection: CodeBrowserSelection) => {
+    setLocation(selection.location);
+    if (selection.label && !label) {
+      setLabel(selection.label);
+    }
+    setShowBrowser(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,14 +76,30 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
             <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
               Location <span style={{ color: '#dc3545' }}>*</span>
             </label>
-            <input
-              type="text"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              placeholder="path/to/file.py:42 or path/to/file.py::ClassName.method"
-              required
-              style={{ width: '100%', fontFamily: 'monospace' }}
-            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="path/to/file.py:42 or path/to/file.py::ClassName.method"
+                required
+                style={{ flex: 1, fontFamily: 'monospace' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowBrowser(true)}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  background: '#f8f9fa',
+                }}
+              >
+                Browse...
+              </button>
+            </div>
             <small style={{ color: '#666', display: 'block', marginTop: 4 }}>
               <strong>Line-based:</strong> path:line or path:start-end (e.g., config.py:10-25)
               <br />
@@ -183,6 +209,14 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
           </button>
         </div>
       </form>
+
+      {showBrowser && (
+        <CodeBrowserModal
+          projectId={projectId}
+          onSelect={handleBrowserSelect}
+          onCancel={() => setShowBrowser(false)}
+        />
+      )}
     </div>
   );
 }

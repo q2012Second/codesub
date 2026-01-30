@@ -15,6 +15,9 @@ import type {
   ApplyUpdatesRequest,
   ApplyUpdatesResponse,
   FilesystemBrowseResponse,
+  FileListResponse,
+  FileContentResponse,
+  SymbolsResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -228,4 +231,53 @@ export async function browseFilesystem(path: string = '~'): Promise<FilesystemBr
   const url = `${API_BASE}/filesystem/browse?path=${encodeURIComponent(path)}`;
   const response = await fetch(url);
   return handleResponse<FilesystemBrowseResponse>(response);
+}
+
+// --- Code Browser API ---
+
+export async function listProjectFiles(
+  projectId: string,
+  options?: {
+    search?: string;
+    extensions?: string[];
+    textOnly?: boolean;
+    limit?: number;
+    offset?: number;
+  },
+  signal?: AbortSignal
+): Promise<FileListResponse> {
+  const params = new URLSearchParams();
+  if (options?.search) params.set('search', options.search);
+  if (options?.extensions?.length) params.set('extensions', options.extensions.join(','));
+  if (options?.textOnly !== undefined) params.set('text_only', String(options.textOnly));
+  if (options?.limit) params.set('limit', options.limit.toString());
+  if (options?.offset) params.set('offset', options.offset.toString());
+
+  const url = `${API_BASE}/projects/${projectId}/files?${params}`;
+  const response = await fetch(url, { signal });
+  return handleResponse<FileListResponse>(response);
+}
+
+export async function getProjectFileContent(
+  projectId: string,
+  path: string,
+  signal?: AbortSignal
+): Promise<FileContentResponse> {
+  const params = new URLSearchParams({ path });
+  const url = `${API_BASE}/projects/${projectId}/file-content?${params}`;
+  const response = await fetch(url, { signal });
+  return handleResponse<FileContentResponse>(response);
+}
+
+export async function getProjectFileSymbols(
+  projectId: string,
+  path: string,
+  kind?: string,
+  signal?: AbortSignal
+): Promise<SymbolsResponse> {
+  const params = new URLSearchParams({ path });
+  if (kind) params.set('kind', kind);
+  const url = `${API_BASE}/projects/${projectId}/file-symbols?${params}`;
+  const response = await fetch(url, { signal });
+  return handleResponse<SymbolsResponse>(response);
 }

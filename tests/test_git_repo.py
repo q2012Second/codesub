@@ -120,3 +120,42 @@ class TestGitRepo:
 
         rel = repo.relative_path(abs_path)
         assert rel == "subdir/file.txt"
+
+    def test_list_files_at_head(self, git_repo):
+        repo = GitRepo(git_repo)
+        files = repo.list_files("HEAD")
+
+        assert isinstance(files, list)
+        assert "test.txt" in files
+
+    def test_list_files_multiple_files(self, git_repo):
+        repo = GitRepo(git_repo)
+
+        # Add more files
+        (git_repo / "subdir").mkdir()
+        (git_repo / "subdir" / "nested.txt").write_text("nested content\n")
+        (git_repo / "another.py").write_text("# python file\n")
+        commit_changes(git_repo, "Add more files")
+
+        files = repo.list_files("HEAD")
+
+        assert "test.txt" in files
+        assert "subdir/nested.txt" in files
+        assert "another.py" in files
+
+    def test_list_files_at_old_commit(self, git_repo):
+        repo = GitRepo(git_repo)
+        old_head = repo.head()
+
+        # Add a new file
+        (git_repo / "new_file.txt").write_text("new\n")
+        commit_changes(git_repo, "Add new file")
+
+        # Old commit should not have new file
+        old_files = repo.list_files(old_head)
+        assert "new_file.txt" not in old_files
+        assert "test.txt" in old_files
+
+        # New commit should have new file
+        new_files = repo.list_files("HEAD")
+        assert "new_file.txt" in new_files
