@@ -357,6 +357,18 @@ def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
         )
     semantic = None
     if sub.semantic:
+        # Convert baseline_members if present
+        baseline_members = None
+        if sub.semantic.baseline_members:
+            baseline_members = {
+                k: MemberFingerprintSchema(
+                    kind=v.kind,
+                    interface_hash=v.interface_hash,
+                    body_hash=v.body_hash,
+                )
+                for k, v in sub.semantic.baseline_members.items()
+            }
+
         semantic = SemanticTargetSchema(
             language=sub.semantic.language,
             kind=sub.semantic.kind,
@@ -365,6 +377,11 @@ def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
             interface_hash=sub.semantic.interface_hash,
             body_hash=sub.semantic.body_hash,
             fingerprint_version=sub.semantic.fingerprint_version,
+            include_members=sub.semantic.include_members,
+            include_private=sub.semantic.include_private,
+            track_decorators=sub.semantic.track_decorators,
+            baseline_members=baseline_members,
+            baseline_container_qualname=sub.semantic.baseline_container_qualname,
         )
     return SubscriptionSchema(
         id=sub.id,
@@ -1233,7 +1250,7 @@ def get_project_file_symbols(
                 role=c.role,
                 start_line=c.start_line,
                 end_line=c.end_line,
-                target=f"{path}::{c.qualname}",
+                target=f"{path}::{c.kind}:{c.qualname}",
             )
             for c in constructs
         ],

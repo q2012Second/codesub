@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import type { FileContentResponse, SymbolsResponse, ConstructInfo, CodeBrowserSelection } from '../types';
+import { isContainerKind } from '../types';
 import { getProjectFileContent, getProjectFileSymbols } from '../api';
 
 // Construct kinds that can be tracked as subscriptions
-// Note: Python/Java indexers only return these kinds as trackable constructs
-const TRACKABLE_KINDS = new Set(['variable', 'field', 'method']);
+// Includes both member kinds and container kinds (class/enum/interface)
+const TRACKABLE_KINDS = new Set(['variable', 'field', 'method', 'class', 'interface', 'enum']);
 
 interface Props {
   projectId: string;
@@ -137,12 +138,12 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
     return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
   }, [isDragging]);
 
-  // Handle construct click (semantic selection)
+  // Handle construct click (semantic selection) - toggle if already selected
   const handleConstructClick = (construct: ConstructInfo, event: React.MouseEvent) => {
     event.stopPropagation();
     setLineSelection(null);
     setSelectionAnchor(null);
-    setSelectedConstruct(construct);
+    setSelectedConstruct(selectedConstruct === construct ? null : construct);
   };
 
   // Get current selection result
@@ -150,8 +151,9 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
     if (selectedConstruct) {
       return {
         type: 'semantic',
-        location: selectedConstruct.target,
+        location: selectedConstruct.target,  // Now includes kind: path::kind:qualname
         label: `${selectedConstruct.kind}: ${selectedConstruct.qualname}`,
+        kind: selectedConstruct.kind,
       };
     }
     if (lineSelection) {
@@ -314,7 +316,10 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
                       <span
                         onClick={(e) => handleConstructClick(construct, e)}
                         style={{
-                          background: selectedConstruct === construct ? '#a5d6a7' : '#e8f5e9',
+                          // Blue for containers, green for members
+                          background: selectedConstruct === construct
+                            ? (isContainerKind(construct.kind) ? '#90caf9' : '#a5d6a7')
+                            : (isContainerKind(construct.kind) ? '#e3f2fd' : '#e8f5e9'),
                           borderRadius: 2,
                           padding: '0 2px',
                           cursor: 'pointer',
@@ -322,15 +327,15 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
                         }}
                         onMouseEnter={(e) => {
                           if (selectedConstruct !== construct) {
-                            e.currentTarget.style.background = '#c8e6c9';
+                            e.currentTarget.style.background = isContainerKind(construct.kind) ? '#bbdefb' : '#c8e6c9';
                           }
                         }}
                         onMouseLeave={(e) => {
                           if (selectedConstruct !== construct) {
-                            e.currentTarget.style.background = '#e8f5e9';
+                            e.currentTarget.style.background = isContainerKind(construct.kind) ? '#e3f2fd' : '#e8f5e9';
                           }
                         }}
-                        title={`${construct.kind}: ${construct.qualname} (click to select)`}
+                        title={`${construct.kind}: ${construct.qualname}${isContainerKind(construct.kind) ? ' (container - can track members)' : ''}`}
                       >
                         {line || ' '}
                       </span>
@@ -364,12 +369,16 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
             <>
               <span style={{
                 padding: '2px 6px',
-                background: selection.type === 'semantic' ? '#c8e6c9' : '#bbdefb',
+                background: selection.type === 'semantic'
+                  ? (isContainerKind(selection.kind) ? '#e3f2fd' : '#c8e6c9')
+                  : '#bbdefb',
                 borderRadius: 3,
                 fontSize: 11,
                 marginRight: 8,
               }}>
-                {selection.type === 'semantic' ? 'Semantic' : 'Lines'}
+                {selection.type === 'semantic'
+                  ? (isContainerKind(selection.kind) ? 'Container' : 'Semantic')
+                  : 'Lines'}
               </span>
               <code>{selection.location}</code>
             </>

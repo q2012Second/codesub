@@ -25,8 +25,9 @@ export function SubscriptionDetail({
   const [confirmHardDelete, setConfirmHardDelete] = useState(false);
 
   const isSemantic = sub.semantic != null;
+  // Include kind in location for semantic subscriptions
   const location = sub.semantic
-    ? `${sub.path}::${sub.semantic.qualname}`
+    ? `${sub.path}::${sub.semantic.kind}:${sub.semantic.qualname}`
     : sub.start_line === sub.end_line
       ? `${sub.path}:${sub.start_line}`
       : `${sub.path}:${sub.start_line}-${sub.end_line}`;
@@ -116,6 +117,43 @@ export function SubscriptionDetail({
 
               <dt style={{ fontWeight: 600, color: '#555' }}>Language:</dt>
               <dd style={{ textTransform: 'capitalize' }}>{sub.semantic.language}</dd>
+
+              <dt style={{ fontWeight: 600, color: '#555' }}>Tracking Options:</dt>
+              <dd>
+                {sub.trigger_on_duplicate && (
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      fontSize: 11,
+                      background: '#e2e3e5',
+                      color: '#41464b',
+                      marginRight: 6,
+                    }}
+                  >
+                    Trigger on duplicate
+                  </span>
+                )}
+                {sub.semantic.include_members && (
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      fontSize: 11,
+                      background: '#cfe2ff',
+                      color: '#084298',
+                      marginRight: 6,
+                    }}
+                  >
+                    Track members
+                  </span>
+                )}
+                {!sub.trigger_on_duplicate && !sub.semantic.include_members && (
+                  <span style={{ color: '#999' }}>Default</span>
+                )}
+              </dd>
             </>
           )}
 
@@ -185,6 +223,108 @@ export function SubscriptionDetail({
                   {sub.semantic.fingerprint_version ?? '-'}
                 </dd>
               </dl>
+            </div>
+          </details>
+        )}
+
+        {/* Container Tracking details for aggregate subscriptions */}
+        {isSemantic && sub.semantic && sub.semantic.include_members && (
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#555', fontSize: 14 }}>
+              Container Tracking Details
+            </summary>
+            <div
+              style={{
+                marginTop: 8,
+                padding: 12,
+                background: '#fff',
+                border: '1px solid #e9ecef',
+                borderRadius: 4,
+              }}
+            >
+              <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', margin: 0 }}>
+                <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Include Private:</dt>
+                <dd style={{ fontSize: 13 }}>
+                  <span
+                    style={{
+                      padding: '1px 6px',
+                      background: sub.semantic.include_private ? '#d4edda' : '#f8d7da',
+                      borderRadius: 3,
+                      fontSize: 11,
+                    }}
+                  >
+                    {sub.semantic.include_private ? 'Yes' : 'No'}
+                  </span>
+                </dd>
+
+                <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Track Decorators:</dt>
+                <dd style={{ fontSize: 13 }}>
+                  <span
+                    style={{
+                      padding: '1px 6px',
+                      background: sub.semantic.track_decorators ? '#d4edda' : '#f8d7da',
+                      borderRadius: 3,
+                      fontSize: 11,
+                    }}
+                  >
+                    {sub.semantic.track_decorators ? 'Yes' : 'No'}
+                  </span>
+                </dd>
+
+                {sub.semantic.baseline_container_qualname &&
+                  sub.semantic.baseline_container_qualname !== sub.semantic.qualname && (
+                    <>
+                      <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Original Name:</dt>
+                      <dd style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                        {sub.semantic.baseline_container_qualname}
+                        <span style={{ color: '#dc3545', marginLeft: 8 }}>(renamed)</span>
+                      </dd>
+                    </>
+                  )}
+
+                {sub.semantic.baseline_members && (
+                  <>
+                    <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Tracked Members:</dt>
+                    <dd style={{ fontSize: 13 }}>
+                      {Object.keys(sub.semantic.baseline_members).length} members
+                    </dd>
+                  </>
+                )}
+              </dl>
+
+              {sub.semantic.baseline_members &&
+                Object.keys(sub.semantic.baseline_members).length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontWeight: 500, color: '#666', fontSize: 13, marginBottom: 8 }}>
+                      Baseline Members:
+                    </div>
+                    <div
+                      style={{
+                        maxHeight: 200,
+                        overflow: 'auto',
+                        background: '#f8f9fa',
+                        borderRadius: 4,
+                        padding: 8,
+                      }}
+                    >
+                      {Object.entries(sub.semantic.baseline_members).map(([name, fp]) => (
+                        <div
+                          key={name}
+                          style={{
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                            padding: '2px 0',
+                            display: 'flex',
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ color: '#666', minWidth: 60 }}>{fp.kind}</span>
+                          <span>{name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
             </div>
           </details>
         )}

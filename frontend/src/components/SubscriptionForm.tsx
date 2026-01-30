@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest, CodeBrowserSelection } from '../types';
+import { isContainerKind, parseSemanticLocation } from '../types';
 import { createProjectSubscription, updateProjectSubscription } from '../api';
 import { CodeBrowserModal } from './CodeBrowserModal';
 
@@ -22,10 +23,30 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
   const [error, setError] = useState<string | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
 
+  // Container tracking options
+  const [includeMembers, setIncludeMembers] = useState(false);
+  const [includePrivate, setIncludePrivate] = useState(false);
+  const [trackDecorators, setTrackDecorators] = useState(true);
+  const [triggerOnDuplicate, setTriggerOnDuplicate] = useState(
+    subscription?.trigger_on_duplicate ?? false
+  );
+
+  // Derive kind from location (works for both browser and manual entry)
+  const parsedLocation = useMemo(() => parseSemanticLocation(location), [location]);
+  const isSemanticLocation = parsedLocation !== null;
+  const selectedKind = parsedLocation?.kind ?? null;
+  const showContainerOptions = isContainerKind(selectedKind);
+
   const handleBrowserSelect = (selection: CodeBrowserSelection) => {
     setLocation(selection.location);
     if (selection.label && !label) {
       setLabel(selection.label);
+    }
+    // Reset container options if switching to non-container
+    if (!isContainerKind(selection.kind)) {
+      setIncludeMembers(false);
+      setIncludePrivate(false);
+      setTrackDecorators(true);
     }
     setShowBrowser(false);
   };
@@ -42,6 +63,7 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
         const data: SubscriptionUpdateRequest = {
           label: label || undefined,
           description: description || undefined,
+          trigger_on_duplicate: triggerOnDuplicate,
         };
         result = await updateProjectSubscription(projectId, subscription.id, data);
       } else {
@@ -50,6 +72,10 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
           label: label || undefined,
           description: description || undefined,
           context,
+          trigger_on_duplicate: triggerOnDuplicate,
+          include_members: showContainerOptions && includeMembers ? true : undefined,
+          include_private: showContainerOptions && includeMembers && includePrivate ? true : undefined,
+          track_decorators: showContainerOptions && includeMembers ? trackDecorators : undefined,
         };
         result = await createProjectSubscription(projectId, data);
       }
@@ -105,7 +131,7 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
               <br />
               <strong>Semantic:</strong> path::QualifiedName (e.g., auth.py::User.validate)
             </small>
-            {location.includes('::') && location.split('::')[1]?.trim() && (
+            {isSemanticLocation && (
               <div
                 style={{
                   marginTop: 8,
@@ -116,7 +142,92 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
                   color: '#0c5460',
                 }}
               >
-                Detected: <strong>semantic subscription</strong> - will track code construct by identity
+                Detected: <strong>semantic subscription</strong>
+                {selectedKind && (
+                  <>
+                    {' - '}
+                    <strong>{selectedKind}</strong>
+                    {isContainerKind(selectedKind) && ' (container)'}
+                  </>
+                )}
+                {!selectedKind && (
+                  <span style={{ color: '#666', marginLeft: 8 }}>
+                    (Tip: use <code>path::kind:qualname</code> for explicit kind)
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Configuration options for semantic subscriptions */}
+            {isSemanticLocation && (
+              <div style={{
+                marginTop: 12,
+                padding: 16,
+                background: '#f8f9fa',
+                borderRadius: 4,
+                border: '1px solid #e9ecef',
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 14 }}>
+                  Subscription Options
+                </div>
+
+                {/* Trigger on duplicate - available for all semantic subscriptions */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={triggerOnDuplicate}
+                    onChange={(e) => setTriggerOnDuplicate(e.target.checked)}
+                  />
+                  <span>Trigger if construct found in multiple files</span>
+                </label>
+
+                {/* Container-specific options */}
+                {showContainerOptions && (
+                  <>
+                    <div style={{
+                      marginTop: 12,
+                      paddingTop: 12,
+                      borderTop: '1px solid #dee2e6',
+                      marginBottom: 8,
+                      fontWeight: 500,
+                      fontSize: 13,
+                      color: '#495057',
+                    }}>
+                      Container Tracking
+                    </div>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={includeMembers}
+                        onChange={(e) => setIncludeMembers(e.target.checked)}
+                      />
+                      <span>Track all members (trigger on any member change)</span>
+                    </label>
+
+                    {includeMembers && (
+                      <>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, marginLeft: 24, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={includePrivate}
+                            onChange={(e) => setIncludePrivate(e.target.checked)}
+                          />
+                          <span>Include private members (_prefixed, Python only)</span>
+                        </label>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 24, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={trackDecorators}
+                            onChange={(e) => setTrackDecorators(e.target.checked)}
+                          />
+                          <span>Track decorator changes</span>
+                        </label>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -124,27 +235,42 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
 
         {isEdit && subscription && (
           <div style={{ marginBottom: 20, padding: 16, background: '#f8f9fa', borderRadius: 4 }}>
-            <strong>Location:</strong>{' '}
-            <code style={{ fontSize: 13 }}>
-              {subscription.semantic
-                ? `${subscription.path}::${subscription.semantic.qualname}`
-                : subscription.start_line === subscription.end_line
-                  ? `${subscription.path}:${subscription.start_line}`
-                  : `${subscription.path}:${subscription.start_line}-${subscription.end_line}`}
-            </code>
+            <div style={{ marginBottom: 12 }}>
+              <strong>Location:</strong>{' '}
+              <code style={{ fontSize: 13 }}>
+                {subscription.semantic
+                  ? `${subscription.path}::${subscription.semantic.kind}:${subscription.semantic.qualname}`
+                  : subscription.start_line === subscription.end_line
+                    ? `${subscription.path}:${subscription.start_line}`
+                    : `${subscription.path}:${subscription.start_line}-${subscription.end_line}`}
+              </code>
+              {subscription.semantic && (
+                <span
+                  style={{
+                    marginLeft: 8,
+                    padding: '2px 6px',
+                    borderRadius: 3,
+                    fontSize: 11,
+                    background: isContainerKind(subscription.semantic.kind) ? '#e3f2fd' : '#d1ecf1',
+                    color: isContainerKind(subscription.semantic.kind) ? '#0d47a1' : '#0c5460',
+                  }}
+                >
+                  {subscription.semantic.kind}
+                  {isContainerKind(subscription.semantic.kind) && ' (container)'}
+                </span>
+              )}
+            </div>
+
+            {/* Editable trigger_on_duplicate for semantic subscriptions */}
             {subscription.semantic && (
-              <span
-                style={{
-                  marginLeft: 8,
-                  padding: '2px 6px',
-                  borderRadius: 3,
-                  fontSize: 11,
-                  background: '#d1ecf1',
-                  color: '#0c5460',
-                }}
-              >
-                {subscription.semantic.kind}
-              </span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={triggerOnDuplicate}
+                  onChange={(e) => setTriggerOnDuplicate(e.target.checked)}
+                />
+                <span>Trigger if construct found in multiple files</span>
+              </label>
             )}
           </div>
         )}

@@ -4,14 +4,26 @@ export interface Anchor {
   context_after: string[];
 }
 
+export interface MemberFingerprint {
+  kind: string;
+  interface_hash: string;
+  body_hash: string;
+}
+
 export interface SemanticTarget {
-  language: string; // "python"
-  kind: string; // "variable" | "field" | "method"
-  qualname: string; // "API_VERSION" | "User.role" | "Calculator.add"
+  language: string; // "python" | "java"
+  kind: string; // "variable" | "field" | "method" | "class" | "interface" | "enum"
+  qualname: string; // "API_VERSION" | "User.role" | "Calculator.add" | "User"
   role?: string | null; // "const" for constants, null otherwise
   interface_hash?: string;
   body_hash?: string;
   fingerprint_version?: number;
+  // Container tracking fields
+  include_members?: boolean;
+  include_private?: boolean;
+  track_decorators?: boolean;
+  baseline_members?: Record<string, MemberFingerprint> | null;
+  baseline_container_qualname?: string | null;
 }
 
 // Defensive union type accepting both cases (backend uses UPPERCASE, but be tolerant)
@@ -37,6 +49,7 @@ export interface Subscription {
   anchors: Anchor | null;
   semantic?: SemanticTarget | null; // null/undefined for line-based subscriptions
   active: boolean;
+  trigger_on_duplicate: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -53,11 +66,17 @@ export interface SubscriptionCreateRequest {
   label?: string;
   description?: string;
   context?: number;
+  // Container tracking options
+  trigger_on_duplicate?: boolean;
+  include_members?: boolean;
+  include_private?: boolean;
+  track_decorators?: boolean;
 }
 
 export interface SubscriptionUpdateRequest {
   label?: string;
   description?: string;
+  trigger_on_duplicate?: boolean;
 }
 
 export interface ApiError {
@@ -230,6 +249,30 @@ export interface SymbolsResponse {
 
 export interface CodeBrowserSelection {
   type: 'semantic' | 'lines';
-  location: string;
+  location: string;  // For semantic: path::kind:qualname
   label?: string;
+  kind?: string | null;  // For semantic selections, the construct kind
+}
+
+// Container kinds that support aggregate tracking (include_members)
+export const CONTAINER_KINDS: Record<string, Set<string>> = {
+  python: new Set(['class', 'enum']),
+  java: new Set(['class', 'interface', 'enum']),
+};
+
+// Helper to check if a kind is a container type
+export function isContainerKind(kind: string | null | undefined): boolean {
+  if (!kind) return false;
+  return CONTAINER_KINDS.python.has(kind) || CONTAINER_KINDS.java.has(kind);
+}
+
+// Helper to parse kind from location string (path::kind:qualname or path::qualname)
+export function parseSemanticLocation(location: string): { path: string; kind: string | null; qualname: string } | null {
+  const match = location.match(/^(.+?)::(?:([a-z]+):)?(.+)$/);
+  if (!match) return null;
+  return {
+    path: match[1],
+    kind: match[2] || null,
+    qualname: match[3],
+  };
 }

@@ -92,6 +92,36 @@ export function SubscriptionList({ subscriptions, onSelect }: Props) {
                       const
                     </span>
                   )}
+                  {sub.semantic.include_members && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        padding: '1px 4px',
+                        borderRadius: 10,
+                        fontSize: 10,
+                        background: '#cfe2ff',
+                        color: '#084298',
+                      }}
+                      title="Tracking all members of this container"
+                    >
+                      members
+                    </span>
+                  )}
+                  {sub.trigger_on_duplicate && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        padding: '1px 4px',
+                        borderRadius: 10,
+                        fontSize: 10,
+                        background: '#e2e3e5',
+                        color: '#41464b',
+                      }}
+                      title="Triggers if construct found in multiple files"
+                    >
+                      dup
+                    </span>
+                  )}
                   <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#999', marginLeft: 8 }}>
                     {sub.path}:{sub.start_line}-{sub.end_line}
                   </span>

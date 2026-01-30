@@ -236,7 +236,7 @@ class TestGetFileSymbols:
         assert all(c["kind"] == "method" for c in data["constructs"])
 
     def test_get_symbols_target_format(self, project_with_python):
-        """Target string is correctly formatted."""
+        """Target string is correctly formatted with kind."""
         client, project_id = project_with_python
         response = client.get(
             f"/api/projects/{project_id}/file-symbols?path=example.py"
@@ -245,10 +245,10 @@ class TestGetFileSymbols:
         assert response.status_code == 200
         data = response.json()
 
-        # Find the User.greet method
+        # Find the User.greet method - target now includes kind
         greet = next((c for c in data["constructs"] if c["qualname"] == "User.greet"), None)
         assert greet is not None
-        assert greet["target"] == "example.py::User.greet"
+        assert greet["target"] == "example.py::method:User.greet"
 
     def test_get_symbols_unsupported_language(self, project_client):
         """Returns 400 for unsupported language."""
