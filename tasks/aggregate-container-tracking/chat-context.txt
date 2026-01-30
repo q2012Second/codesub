@@ -1,0 +1,5584 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: src/codesub/models.py, src/codesub/detector.py, src/codesub/cli.py, src/codesub/api.py, src/codesub/updater.py, src/codesub/utils.py, src/codesub/update_doc.py, src/codesub/errors.py, src/codesub/semantic/construct.py, src/codesub/semantic/indexer_protocol.py, src/codesub/semantic/python_indexer.py, src/codesub/semantic/java_indexer.py, tasks/aggregate-container-tracking/plan.md, tasks/aggregate-container-tracking/problem.md
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+src/
+  codesub/
+    semantic/
+      construct.py
+      indexer_protocol.py
+      java_indexer.py
+      python_indexer.py
+    api.py
+    cli.py
+    detector.py
+    errors.py
+    models.py
+    update_doc.py
+    updater.py
+    utils.py
+tasks/
+  aggregate-container-tracking/
+    plan.md
+    problem.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="tasks/aggregate-container-tracking/plan.md">
+# Implementation Plan: Aggregate/Container Tracking
+
+## Overview
+
+Add `--include-members` flag to semantic subscriptions that tracks a container (class/enum) and triggers when ANY member changes. This feature allows users to subscribe to an entire class or enum and receive notifications when any field, method, or nested class within the container is modified, added, or removed.
+
+**Target Usage:**
+```bash
+codesub add auth.py::User --include-members
+codesub add auth.py::User --include-members --include-private
+codesub add auth.py::User --include-members --no-track-decorators
+```
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Store flags in `SemanticTarget`, not `Subscription` | Keeps semantic-specific configuration grouped together; these flags only make sense for semantic subscriptions |
+| Default `include_private=False` | Private members (`_field`) are implementation details; users must opt-in to track them |
+| Default `track_decorators=True` | Decorator changes often signal API changes and should trigger by default |
+| Track nested classes as members | Nested classes are part of the container's interface and should be monitored |
+| Module-level aggregation NOT supported | Out of scope; too broad and could create noisy subscriptions |
+| Report only changed members | Reduces noise; include parent subscription reference so user knows which aggregate subscription triggered |
+| Store baseline member fingerprints | Enables detection of new members added since subscription creation |
+| Use new change type `AGGREGATE` | Distinguishes container triggers from single-construct triggers |
+| Container subscriptions skip Stage 2/3 relocation | If Stage 1 fails (container not found at qualname), return MISSING trigger immediately; hash-based relocation is not useful for containers |
+| `--include-private` only affects Python | Python uses underscore convention for private members; Java uses visibility modifiers which we don't parse, so all Java members are always included |
+| Frontend updates deferred | Frontend changes to display aggregate triggers are out of scope for this PR; will be addressed in a follow-up |
+| Recapture baseline members on proposal apply | When applying proposals, baseline_members must be refreshed to reflect current state |
+
+**User Requirements:**
+- `--include-private`: Optional flag to include private members (disabled by default)
+- `--no-track-decorators`: Optional flag to disable decorator change detection (enabled by default)
+- Only class/enum constructs can use `--include-members`
+- New member detection is required
+- Changed members should include parent subscription reference
+
+**Alternative Approaches Considered:**
+- **Store member list in Subscription**: Rejected because it duplicates information already in SemanticTarget and grows storage
+- **Separate `ContainerSubscription` model**: Rejected because it complicates the existing model hierarchy; flags on SemanticTarget are simpler
+- **Dynamic member discovery only**: Rejected because we need to detect NEW members added since baseline, which requires storing the baseline member set
+
+## Prerequisites
+
+- Familiarity with the existing `SemanticTarget` and `Subscription` models
+- Understanding of the `_check_semantic()` detection flow in `detector.py`
+- Tree-sitter indexer APIs (`index_file`, `find_construct`)
+
+## Implementation Steps
+
+### Step 1: Extend SemanticTarget Model
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/models.py`
+
+**Changes:**
+- Add `include_members: bool = False` field to `SemanticTarget`
+- Add `include_private: bool = False` field to `SemanticTarget`
+- Add `track_decorators: bool = True` field to `SemanticTarget`
+- Add `baseline_members: dict[str, MemberFingerprint] | None = None` field to store member fingerprints at creation time
+- Update `to_dict()` and `from_dict()` methods to serialize new fields
+
+**Code:**
+```python
+@dataclass
+class MemberFingerprint:
+    """Fingerprint data for a container member at baseline."""
+    kind: str
+    interface_hash: str
+    body_hash: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MemberFingerprint":
+        return cls(
+            kind=data["kind"],
+            interface_hash=data["interface_hash"],
+            body_hash=data["body_hash"],
+        )
+
+
+@dataclass
+class SemanticTarget:
+    """Semantic identifier for a code construct."""
+
+    language: str
+    kind: str
+    qualname: str
+    role: str | None = None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+    # Container tracking flags
+    include_members: bool = False
+    include_private: bool = False
+    track_decorators: bool = True
+    # Baseline member fingerprints (only populated when include_members=True)
+    baseline_members: dict[str, MemberFingerprint] | None = None
+```
+
+### Step 2: Add Container Validation Constant
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/models.py`
+
+**Changes:**
+- Add module-level constant defining valid container kinds per language
+
+**Code:**
+```python
+# Valid container kinds that can use include_members
+CONTAINER_KINDS: dict[str, set[str]] = {
+    "python": {"class", "enum"},
+    "java": {"class", "interface", "enum"},
+}
+```
+
+### Step 3: Add Helper Function to Extract Container Members
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/semantic/python_indexer.py`
+
+**Changes:**
+- Add `get_container_members()` method to `PythonIndexer`
+- Method filters constructs by qualname prefix to find direct members only
+
+**Code:**
+```python
+def get_container_members(
+    self,
+    source: str,
+    path: str,
+    container_qualname: str,
+    include_private: bool = False,
+) -> list[Construct]:
+    """Get all direct members of a container construct.
+
+    Args:
+        source: Source code text.
+        path: File path.
+        container_qualname: Qualname of the container (e.g., "User").
+        include_private: Whether to include private members (_prefixed).
+
+    Returns:
+        List of Construct objects that are direct members of the container.
+    """
+    all_constructs = self.index_file(source, path)
+    prefix = f"{container_qualname}."
+
+    members = []
+    for c in all_constructs:
+        if c.qualname.startswith(prefix):
+            member_name = c.qualname[len(prefix):]
+            # Only include direct members (one level deep)
+            if "." in member_name:
+                continue  # Skip nested members' members
+            # Filter private if requested
+            if not include_private and member_name.startswith("_"):
+                continue
+            members.append(c)
+
+    return members
+```
+
+### Step 4: Add Same Helper to Java Indexer
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/semantic/java_indexer.py`
+
+**Changes:**
+- Add `get_container_members()` method to `JavaIndexer` with same signature
+- Note: `include_private` parameter is accepted for API consistency but has no effect for Java (all members included)
+
+**Code:**
+```python
+def get_container_members(
+    self,
+    source: str,
+    path: str,
+    container_qualname: str,
+    include_private: bool = False,
+) -> list[Construct]:
+    """Get all direct members of a container construct.
+
+    Note: The include_private parameter only affects Python subscriptions
+    (underscore naming convention). For Java, all members are always included
+    since Java uses visibility modifiers (public/private/protected) which
+    we do not parse. The parameter is accepted for API consistency.
+
+    Args:
+        source: Source code text.
+        path: File path.
+        container_qualname: Qualname of the container.
+        include_private: Ignored for Java; accepted for API consistency.
+
+    Returns:
+        List of Construct objects that are direct members of the container.
+    """
+    all_constructs = self.index_file(source, path)
+    prefix = f"{container_qualname}."
+
+    members = []
+    for c in all_constructs:
+        if c.qualname.startswith(prefix):
+            member_name = c.qualname[len(prefix):]
+            # Only include direct members (one level deep)
+            if "." in member_name:
+                continue  # Skip nested members' members
+            # Note: No private filtering for Java - all members included
+            members.append(c)
+
+    return members
+```
+
+### Step 5: Add Indexer Protocol Method
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/semantic/indexer_protocol.py`
+
+**Changes:**
+- Add `get_container_members()` to the `SemanticIndexer` protocol
+
+**Code:**
+```python
+from typing import Protocol
+
+class SemanticIndexer(Protocol):
+    def index_file(self, source: str, path: str) -> list[Construct]: ...
+    def find_construct(
+        self, source: str, path: str, qualname: str, kind: str | None = None
+    ) -> Construct | None: ...
+    def get_container_members(
+        self,
+        source: str,
+        path: str,
+        container_qualname: str,
+        include_private: bool = False,
+    ) -> list[Construct]: ...
+```
+
+### Step 6: Extend CLI with Container Flags
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/cli.py`
+
+**Changes:**
+- Add `--include-members` flag to `add` subparser
+- Add `--include-private` flag to `add` subparser
+- Add `--no-track-decorators` flag to `add` subparser
+- Update `_add_semantic_subscription()` to validate container kind and pass flags
+
+**Code:**
+```python
+# In create_parser(), add to add_parser:
+add_parser.add_argument(
+    "--include-members",
+    action="store_true",
+    help="Track all members of a container (class/enum). Triggers on any member change."
+)
+add_parser.add_argument(
+    "--include-private",
+    action="store_true",
+    help="Include private members (_prefixed) when using --include-members. Only affects Python."
+)
+add_parser.add_argument(
+    "--no-track-decorators",
+    action="store_true",
+    help="Disable tracking decorator changes (default: track decorators)"
+)
+```
+
+**In `_add_semantic_subscription()`:**
+```python
+from .models import CONTAINER_KINDS
+
+# After finding the construct:
+include_members = getattr(args, 'include_members', False)
+include_private = getattr(args, 'include_private', False)
+track_decorators = not getattr(args, 'no_track_decorators', False)
+
+if include_members:
+    valid_kinds = CONTAINER_KINDS.get(language, set())
+    if construct.kind not in valid_kinds:
+        print(f"Error: --include-members only valid for container kinds: {', '.join(sorted(valid_kinds))}")
+        print(f"'{construct.qualname}' is a {construct.kind}, not a container.")
+        return 1
+
+    # Capture baseline member fingerprints
+    baseline_members = {}
+    members = indexer.get_container_members(
+        source, target.path, construct.qualname, include_private
+    )
+    for m in members:
+        baseline_members[m.qualname] = MemberFingerprint(
+            kind=m.kind,
+            interface_hash=m.interface_hash,
+            body_hash=m.body_hash,
+        )
+
+# Create SemanticTarget with new flags:
+semantic = SemanticTarget(
+    language=language,
+    kind=construct.kind,
+    qualname=construct.qualname,
+    role=construct.role,
+    interface_hash=construct.interface_hash,
+    body_hash=construct.body_hash,
+    include_members=include_members,
+    include_private=include_private,
+    track_decorators=track_decorators,
+    baseline_members=baseline_members if include_members else None,
+)
+```
+
+### Step 7: Extend Detector with Container Logic
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/detector.py`
+
+**Changes:**
+- Add `_check_container_members()` method for container-specific detection
+- Modify `_check_semantic()` to delegate to `_check_container_members()` when `include_members=True` after Stage 1 succeeds
+- Container subscriptions skip Stage 2/3 hash-based relocation; if Stage 1 fails, return MISSING trigger immediately
+- Create detailed trigger with `change_type="AGGREGATE"` and member change list
+
+**Code for `_check_container_members()`:**
+```python
+def _check_container_members(
+    self,
+    sub: Subscription,
+    new_source: str,
+    new_path: str,
+    indexer: "SemanticIndexer",
+) -> Trigger | None:
+    """Check container subscription for member changes.
+
+    Returns a trigger if any member changed, was added, or was removed.
+    """
+    assert sub.semantic is not None
+    semantic = sub.semantic
+
+    # Get current members
+    current_members = indexer.get_container_members(
+        new_source, new_path, semantic.qualname, semantic.include_private
+    )
+    current_by_qualname = {m.qualname: m for m in current_members}
+
+    # Get baseline members
+    baseline_members = semantic.baseline_members or {}
+
+    member_changes: list[dict[str, Any]] = []
+    members_added: list[str] = []
+    members_removed: list[str] = []
+
+    # Check for changes and removals
+    for qualname, baseline_fp in baseline_members.items():
+        if qualname not in current_by_qualname:
+            members_removed.append(qualname)
+            member_changes.append({
+                "qualname": qualname,
+                "kind": baseline_fp.kind,
+                "change_type": "MISSING",
+            })
+        else:
+            current = current_by_qualname[qualname]
+            if baseline_fp.interface_hash != current.interface_hash:
+                member_changes.append({
+                    "qualname": qualname,
+                    "kind": current.kind,
+                    "change_type": "STRUCTURAL",
+                    "reason": "interface_changed",
+                })
+            elif baseline_fp.body_hash != current.body_hash:
+                member_changes.append({
+                    "qualname": qualname,
+                    "kind": current.kind,
+                    "change_type": "CONTENT",
+                    "reason": "body_changed",
+                })
+
+    # Check for additions
+    for qualname in current_by_qualname:
+        if qualname not in baseline_members:
+            members_added.append(qualname)
+            current = current_by_qualname[qualname]
+            member_changes.append({
+                "qualname": qualname,
+                "kind": current.kind,
+                "change_type": "ADDED",
+            })
+
+    # Check container-level changes if tracking decorators
+    container_changes = {}
+    if semantic.track_decorators:
+        # Find the container construct and compare its interface_hash
+        container = indexer.find_construct(
+            new_source, new_path, semantic.qualname, semantic.kind
+        )
+        if container and container.interface_hash != semantic.interface_hash:
+            container_changes["decorators_changed"] = True
+            member_changes.append({
+                "qualname": semantic.qualname,
+                "kind": semantic.kind,
+                "change_type": "STRUCTURAL",
+                "reason": "container_interface_changed",
+            })
+
+    if not member_changes:
+        return None  # No changes detected
+
+    # Build trigger with aggregate details
+    details = {
+        "container_qualname": semantic.qualname,
+        "parent_subscription_id": sub.id,
+        "container_changes": container_changes,
+        "member_changes": member_changes,
+        "members_added": members_added,
+        "members_removed": members_removed,
+    }
+
+    reasons = []
+    if members_added:
+        reasons.append("member_added")
+    if members_removed:
+        reasons.append("member_removed")
+    if any(c["change_type"] == "STRUCTURAL" for c in member_changes if c["change_type"] != "ADDED"):
+        reasons.append("member_interface_changed")
+    if any(c["change_type"] == "CONTENT" for c in member_changes):
+        reasons.append("member_body_changed")
+    if container_changes.get("decorators_changed"):
+        reasons.append("container_decorators_changed")
+
+    return Trigger(
+        subscription_id=sub.id,
+        subscription=sub,
+        path=new_path,
+        start_line=sub.start_line,
+        end_line=sub.end_line,
+        reasons=reasons,
+        matching_hunks=[],
+        change_type="AGGREGATE",
+        details=details,
+    )
+```
+
+**Complete integration in `_check_semantic()` - replace lines 437-478 (Stage 1 success block):**
+
+```python
+            if new_construct:
+                # Found by exact qualname - check for changes
+
+                # For container subscriptions, delegate to container member check
+                # Container subscriptions skip Stage 2/3 hash-based relocation
+                if sub.semantic.include_members:
+                    trigger = self._check_container_members(sub, new_source, new_path, indexer)
+                    proposal = None
+
+                    # Generate proposal if location changed (file rename or line shift)
+                    if old_path != new_path:
+                        proposal = Proposal(
+                            subscription_id=sub.id,
+                            subscription=sub,
+                            old_path=old_path,
+                            old_start=sub.start_line,
+                            old_end=sub.end_line,
+                            new_path=new_path,
+                            new_start=new_construct.start_line,
+                            new_end=new_construct.end_line,
+                            reasons=["rename"],
+                            confidence="high",
+                        )
+                    elif (
+                        new_construct.start_line != sub.start_line
+                        or new_construct.end_line != sub.end_line
+                    ):
+                        proposal = Proposal(
+                            subscription_id=sub.id,
+                            subscription=sub,
+                            old_path=old_path,
+                            old_start=sub.start_line,
+                            old_end=sub.end_line,
+                            new_path=new_path,
+                            new_start=new_construct.start_line,
+                            new_end=new_construct.end_line,
+                            reasons=["line_shift"],
+                            confidence="high",
+                        )
+
+                    return trigger, proposal
+
+                # Regular (non-container) semantic subscription
+                trigger = self._classify_semantic_change(sub, new_construct)
+                proposal = None
+
+                if old_path != new_path:
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["rename"],
+                        confidence="high",
+                    )
+                elif (
+                    new_construct.start_line != sub.start_line
+                    or new_construct.end_line != sub.end_line
+                ):
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["line_shift"],
+                        confidence="high",
+                    )
+
+                return trigger, proposal
+```
+
+**Add early return for container subscriptions after Stage 1 fails (before Stage 2):**
+
+After the Stage 1 block (where `new_construct` is checked) but before Stage 2 hash search, add:
+
+```python
+            # Container subscriptions: if Stage 1 failed (not found by qualname),
+            # skip Stage 2/3 hash-based relocation and report MISSING immediately.
+            # Hash-based relocation doesn't make sense for containers since we track
+            # by identity (qualname), not by content.
+            if sub.semantic.include_members:
+                return (
+                    Trigger(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        path=old_path,
+                        start_line=sub.start_line,
+                        end_line=sub.end_line,
+                        reasons=["semantic_target_missing"],
+                        matching_hunks=[],
+                        change_type="MISSING",
+                    ),
+                    None,
+                )
+
+            # Stage 2: Hash-based search in same file (non-container subscriptions only)
+            new_constructs = indexer.index_file(new_source, new_path)
+            # ... rest of Stage 2 ...
+```
+
+### Step 8: Update Updater to Recapture Baseline Members
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/updater.py`
+
+**Changes:**
+- After updating subscription location, recapture `baseline_members` for container subscriptions
+- Also update container's own `interface_hash` and `body_hash` to reflect current state
+
+**Code (add after line 132, within the `if not dry_run:` block):**
+```python
+                # Re-snapshot anchors
+                context_before, watched_lines, context_after = extract_anchors(
+                    new_lines, new_start, new_end, context=2
+                )
+                sub.anchors = Anchor(
+                    context_before=context_before,
+                    lines=watched_lines,
+                    context_after=context_after,
+                )
+
+                # Recapture baseline members for container subscriptions
+                if sub.semantic and sub.semantic.include_members:
+                    from .semantic import get_indexer
+                    from .models import MemberFingerprint
+
+                    try:
+                        indexer = get_indexer(sub.semantic.language)
+                        source = "\n".join(new_lines)
+
+                        # Update container's own fingerprints
+                        container = indexer.find_construct(
+                            source, new_path, sub.semantic.qualname, sub.semantic.kind
+                        )
+                        if container:
+                            sub.semantic.interface_hash = container.interface_hash
+                            sub.semantic.body_hash = container.body_hash
+
+                        # Recapture member fingerprints
+                        members = indexer.get_container_members(
+                            source, new_path, sub.semantic.qualname, sub.semantic.include_private
+                        )
+                        sub.semantic.baseline_members = {
+                            m.qualname: MemberFingerprint(
+                                kind=m.kind,
+                                interface_hash=m.interface_hash,
+                                body_hash=m.body_hash,
+                            )
+                            for m in members
+                        }
+                    except Exception:
+                        # If recapture fails, log warning but don't fail the update
+                        warnings.append(
+                            f"Failed to recapture baseline members for {sub_id[:8]}"
+                        )
+```
+
+### Step 9: Update API Schemas
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/api.py`
+
+**Changes:**
+- Add `include_members`, `include_private`, `track_decorators` to `SubscriptionCreateRequest`
+- Add `include_members`, `include_private`, `track_decorators`, `baseline_members` to `SemanticTargetSchema`
+- Update `subscription_to_schema()` helper
+
+**Code:**
+```python
+class SubscriptionCreateRequest(BaseModel):
+    location: str = Field(...)
+    label: Optional[str] = None
+    description: Optional[str] = None
+    context: int = Field(default=2, ge=0, le=10)
+    trigger_on_duplicate: bool = Field(default=False, ...)
+    include_members: bool = Field(
+        default=False,
+        description="For containers (class/enum): track all members and trigger on any change"
+    )
+    include_private: bool = Field(
+        default=False,
+        description="Include private members (_prefixed) when using include_members. Only affects Python."
+    )
+    track_decorators: bool = Field(
+        default=True,
+        description="Track decorator changes on the container (when include_members=True)"
+    )
+
+
+class MemberFingerprintSchema(BaseModel):
+    kind: str
+    interface_hash: str
+    body_hash: str
+
+
+class SemanticTargetSchema(BaseModel):
+    language: str
+    kind: str
+    qualname: str
+    role: Optional[str] = None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+    include_members: bool = False
+    include_private: bool = False
+    track_decorators: bool = True
+    baseline_members: Optional[dict[str, MemberFingerprintSchema]] = None
+```
+
+### Step 10: Update _create_subscription_from_request in API
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/api.py`
+
+**Changes:**
+- Pass new flags to SemanticTarget creation
+- Validate container kind and capture baseline members
+
+**Code:**
+```python
+def _create_subscription_from_request(...) -> Subscription:
+    # ... existing code ...
+
+    if isinstance(target, SemanticTargetSpec):
+        # ... existing construct lookup ...
+
+        include_members = request.include_members
+        include_private = request.include_private
+        track_decorators = request.track_decorators
+        baseline_members = None
+
+        if include_members:
+            from .models import CONTAINER_KINDS, MemberFingerprint
+            valid_kinds = CONTAINER_KINDS.get(language, set())
+            if construct.kind not in valid_kinds:
+                raise InvalidLocationError(
+                    request.location,
+                    f"--include-members only valid for: {', '.join(sorted(valid_kinds))}. "
+                    f"'{construct.qualname}' is a {construct.kind}."
+                )
+
+            members = indexer.get_container_members(
+                source, target.path, construct.qualname, include_private
+            )
+            baseline_members = {
+                m.qualname: MemberFingerprint(
+                    kind=m.kind,
+                    interface_hash=m.interface_hash,
+                    body_hash=m.body_hash,
+                )
+                for m in members
+            }
+
+        semantic = SemanticTarget(
+            language=language,
+            kind=construct.kind,
+            qualname=construct.qualname,
+            role=construct.role,
+            interface_hash=construct.interface_hash,
+            body_hash=construct.body_hash,
+            include_members=include_members,
+            include_private=include_private,
+            track_decorators=track_decorators,
+            baseline_members=baseline_members,
+        )
+        # ... rest of subscription creation ...
+```
+
+### Step 11: Update Subscription Display
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/utils.py`
+
+**Changes:**
+- Update `format_subscription()` to show container tracking status
+
+**Code:**
+```python
+def format_subscription(sub: "Subscription", verbose: bool = False) -> str:
+    # ... existing code ...
+
+    # Add container indicator
+    if sub.semantic and sub.semantic.include_members:
+        member_count = len(sub.semantic.baseline_members or {})
+        result += f" [container: {member_count} members]"
+        if verbose:
+            if sub.semantic.include_private:
+                result += "\n         Include private: yes"
+            if not sub.semantic.track_decorators:
+                result += "\n         Track decorators: no"
+
+    # ... rest of formatting ...
+```
+
+### Step 12: Update Update Document Format
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/update_doc.py`
+
+**Changes:**
+- Handle `AGGREGATE` change type in trigger formatting
+- Include member change details in output
+
+**Code:**
+```python
+def _format_trigger(trigger: Trigger) -> dict[str, Any]:
+    result = {
+        "subscription_id": trigger.subscription_id,
+        "path": trigger.path,
+        "start_line": trigger.start_line,
+        "end_line": trigger.end_line,
+        "reasons": trigger.reasons,
+        "change_type": trigger.change_type,
+    }
+
+    if trigger.details:
+        result["details"] = trigger.details
+
+    if trigger.subscription.label:
+        result["label"] = trigger.subscription.label
+
+    return result
+```
+
+### Step 13: Add Error for Invalid Container Usage
+
+**Files:** `/Users/vlad/dev/projects/codesub/src/codesub/errors.py`
+
+**Changes:**
+- Add `InvalidContainerError` exception class
+
+**Code:**
+```python
+class InvalidContainerError(CodesubError):
+    """Raised when --include-members is used on a non-container construct."""
+
+    def __init__(self, qualname: str, kind: str, valid_kinds: set[str]) -> None:
+        self.qualname = qualname
+        self.kind = kind
+        self.valid_kinds = valid_kinds
+        super().__init__(
+            f"'{qualname}' is a {kind}, not a container. "
+            f"--include-members requires: {', '.join(sorted(valid_kinds))}"
+        )
+```
+
+## Testing Strategy
+
+### Unit Tests
+
+Add tests to existing test files where appropriate to maintain test organization.
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_models.py` (add to existing)
+
+- [ ] `test_member_fingerprint_serialization` - Verify MemberFingerprint to_dict/from_dict
+- [ ] `test_semantic_target_container_flags_serialization` - Verify new fields serialize/deserialize correctly
+- [ ] `test_container_kinds_constant` - Verify CONTAINER_KINDS has expected values
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_semantic_indexers.py` (add to existing or create)
+
+- [ ] `test_python_get_container_members_basic` - Verify Python indexer extracts class members
+- [ ] `test_python_get_container_members_excludes_private_by_default` - Verify _prefixed members excluded
+- [ ] `test_python_get_container_members_includes_private_when_requested` - Verify _prefixed members included with flag
+- [ ] `test_python_get_container_members_direct_only` - Verify nested class members not included
+- [ ] `test_java_get_container_members_basic` - Verify Java indexer extracts class members
+- [ ] `test_java_get_container_members_includes_all` - Verify include_private has no effect for Java
+
+### Integration Tests
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_detector.py` (add to existing)
+
+- [ ] `test_container_unchanged_no_trigger` - Container with no changes remains unchanged
+- [ ] `test_container_member_value_change_triggers` - Field value change triggers AGGREGATE
+- [ ] `test_container_member_type_change_triggers` - Field type change triggers AGGREGATE (STRUCTURAL)
+- [ ] `test_container_member_added_triggers` - New member triggers AGGREGATE
+- [ ] `test_container_member_removed_triggers` - Deleted member triggers AGGREGATE
+- [ ] `test_container_decorator_change_triggers` - Container decorator change triggers (default)
+- [ ] `test_container_decorator_change_ignored_when_disabled` - No trigger when track_decorators=False
+- [ ] `test_container_cosmetic_change_no_trigger` - Whitespace changes don't trigger
+- [ ] `test_container_line_shift_creates_proposal` - Container moved creates proposal
+- [ ] `test_container_not_found_returns_missing` - Container deleted returns MISSING (no Stage 2/3)
+
+### CLI Tests
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_cli.py` (add to existing)
+
+- [ ] `test_cli_add_include_members_flag` - Verify flag parsing
+- [ ] `test_cli_add_include_private_flag` - Verify flag parsing
+- [ ] `test_cli_add_no_track_decorators_flag` - Verify flag parsing
+- [ ] `test_cli_add_include_members_on_method_fails` - Verify validation error
+- [ ] `test_cli_list_shows_container_status` - Verify display format
+
+### API Tests
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_api.py` (add to existing)
+
+- [ ] `test_api_create_container_subscription` - POST with include_members=true
+- [ ] `test_api_create_container_subscription_invalid_kind` - Verify 400 error
+- [ ] `test_api_get_container_subscription` - Verify schema includes new fields
+- [ ] `test_api_scan_container_trigger` - Verify AGGREGATE trigger in scan response
+
+### Updater Tests
+
+**File:** `/Users/vlad/dev/projects/codesub/tests/test_updater.py` (add to existing)
+
+- [ ] `test_updater_recaptures_baseline_members` - Verify baseline_members refreshed on apply
+- [ ] `test_updater_updates_container_fingerprints` - Verify interface_hash/body_hash updated
+
+## Edge Cases Considered
+
+- **Empty container (class with no members):** Should work, just no member triggers. Container-level changes still tracked.
+- **Single-member container:** Works normally, triggers on that one member change.
+- **Deeply nested classes:** Only direct nested classes are members; their internal members are not tracked unless separately subscribed.
+- **Constructor as member:** `__init__` is a method and tracked as a member.
+- **Static methods and class methods:** Tracked as regular methods (their decorators affect interface_hash).
+- **Properties:** Tracked as methods with `@property` decorator.
+- **Enum values in Python:** Tracked as fields with special handling.
+- **Private nested class:** `_InnerClass` excluded by default, included with `--include-private` (Python only).
+- **Container not found (deleted/renamed):** Returns MISSING trigger immediately; skips Stage 2/3 hash relocation.
+- **Java private members:** All Java members included regardless of `include_private` flag since Java uses visibility modifiers.
+
+## Risks and Mitigations
+
+- **Risk:** Large containers (50+ members) could slow down scans.
+  **Mitigation:** Constructs are already cached per file during scan. Member comparison is O(n) which is acceptable.
+
+- **Risk:** Baseline member snapshot becomes stale if subscription is not updated after applying proposals.
+  **Mitigation:** `updater.py` now recaptures `baseline_members` when applying proposals. Document this behavior.
+
+- **Risk:** Hash collisions causing false negatives (missed changes).
+  **Mitigation:** Use SHA-256 truncated to 16 hex chars. Collision probability is negligible for typical codebases.
+
+- **Risk:** Nested class recursion issues.
+  **Mitigation:** Only track direct members (one level deep via corrected logic). Document this limitation.
+
+- **Risk:** Breaking change if existing subscriptions have unexpected baseline_members field.
+  **Mitigation:** Field defaults to None and is only populated for new container subscriptions. Existing subscriptions are unaffected.
+
+## Out of Scope
+
+- **Frontend updates:** Changes to the React frontend to display aggregate triggers are deferred to a follow-up PR.
+- **Module-level aggregation:** Tracking all constructs in a module is too broad and not supported.
+</file>
+
+<file path="tasks/aggregate-container-tracking/problem.md">
+# Problem Statement: Aggregate/Container Tracking
+
+## Task Type
+**Type:** feature
+
+## Current State
+
+Codesub currently supports two types of subscriptions:
+
+### Line-based subscriptions
+Track specific line ranges in files (e.g., `config.py:10-25`). Changes trigger when:
+- Hunks overlap the watched line range
+- Pure insertions occur within the range (between start and end lines)
+- The file is deleted
+
+### Semantic subscriptions
+Track individual code constructs by identity (e.g., `auth.py::User.validate`, `config.py::MAX_RETRIES`). The system uses Tree-sitter parsing to extract constructs from source code.
+
+**Supported construct kinds:**
+- Python: `variable`, `field`, `method`, `class`, `interface`, `enum`
+- Java: `variable`, `field`, `method`, `class`, `interface`, `enum`
+
+**Current indexing behavior:**
+The semantic indexer extracts ALL constructs from a file, including all members of classes and enums. For example, indexing `models.py` containing a `User` class extracts:
+- `User.id` (field)
+- `User.email` (field)
+- `User.name` (field)
+- `User.validate` (method)
+
+**Current subscription granularity:**
+Users can only subscribe to ONE construct at a time. To monitor all members of a class like `User`, they must create separate subscriptions for each field and method:
+- `models.py::User.id`
+- `models.py::User.email`
+- `models.py::User.name`
+- `models.py::User.validate`
+
+This is tedious and error-prone, especially for large classes or enums.
+
+**Detection mechanism (per subscription):**
+The detector (`/Users/vlad/dev/projects/codesub/src/codesub/detector.py`) performs semantic change detection:
+1. Parses the target file at baseline and HEAD
+2. Looks for the subscribed construct by qualname and fingerprint hashes
+3. Classifies changes as:
+   - `STRUCTURAL`: interface_hash changed (type/signature)
+   - `CONTENT`: body_hash changed (value/implementation)
+   - `MISSING`: construct not found
+
+**Data model:**
+The `Subscription` model (`/Users/vlad/dev/projects/codesub/src/codesub/models.py`) has:
+- `path`: file path
+- `start_line`, `end_line`: line range
+- `semantic`: optional `SemanticTarget` with language, kind, qualname, hashes
+- `trigger_on_duplicate`: boolean flag (triggers when construct found in multiple files)
+
+## Desired State
+
+Users should be able to subscribe to a **container construct** (class, enum, module) and automatically track ALL its members, triggering when ANY member changes.
+
+**Target syntax:**
+```bash
+codesub add models.py::User --include-members
+codesub add types.py::OrderStatus --include-members
+```
+
+**Trigger behavior:**
+When scanning, if ANY member of the container has changed, the subscription triggers. The trigger details should report:
+- Which specific members changed (qualnames)
+- The type of change for each member (STRUCTURAL, CONTENT, MISSING)
+- Any new members added since baseline
+- Container-level changes (e.g., class renamed, decorators changed)
+
+**Change categories to detect:**
+
+1. **Member modifications:**
+   - Field type changed: `User.email: str` → `User.email: str | None` (STRUCTURAL)
+   - Field value changed: `User.region = "US-CA"` → `User.region = "EU-DE"` (CONTENT)
+   - Method signature changed: `validate(self)` → `validate(self, strict: bool)` (STRUCTURAL)
+   - Method body changed: implementation logic updated (CONTENT)
+
+2. **Member additions:**
+   - New field added: `User.phone_number: str`
+   - New method added: `User.archive()`
+
+3. **Member removals:**
+   - Field deleted: `User.region` removed (MISSING)
+   - Method deleted: `User.validate` removed (MISSING)
+
+4. **Container-level changes:**
+   - Class renamed: `class User` → `class UserAccount`
+   - Decorators changed: `@dataclass` → `@dataclass(frozen=True)`
+   - Inheritance changed: `class User` → `class User(BaseModel)`
+
+5. **Cross-file movement:**
+   - Entire class moved to different file (handled by existing cross-file detection)
+
+**Output format (trigger details):**
+```json
+{
+  "change_type": "AGGREGATE",
+  "container_qualname": "User",
+  "container_changes": {
+    "renamed": false,
+    "decorators_changed": false,
+    "inheritance_changed": false
+  },
+  "member_changes": [
+    {
+      "qualname": "User.email",
+      "kind": "field",
+      "change_type": "STRUCTURAL",
+      "old_hash": "abc123",
+      "new_hash": "def456"
+    },
+    {
+      "qualname": "User.phone_number",
+      "kind": "field",
+      "change_type": "ADDED"
+    }
+  ],
+  "members_removed": ["User.region"],
+  "members_added": ["User.phone_number"]
+}
+```
+
+## Constraints
+
+**Technical constraints:**
+
+1. **Backward compatibility:** Existing single-construct semantic subscriptions must continue to work unchanged. The `include_members` flag is optional.
+
+2. **Language support:** Must work for all languages currently supported by semantic subscriptions (Python, Java).
+
+3. **Performance:** For large classes (50+ members), the scan should not become prohibitively slow. Construct indexing is already cached per file during a scan.
+
+4. **Fingerprint stability:** Member fingerprints (interface_hash, body_hash) must remain stable for unchanged members to avoid false positives.
+
+5. **Line range tracking:** Container subscriptions still need `start_line` and `end_line` for:
+   - Display purposes (showing where the container is)
+   - Update proposals when container moves
+   - Anchor extraction for context
+
+**Semantic constraints:**
+
+1. **Container definition:** Only certain construct kinds can be containers:
+   - Python: `class`, `enum` (can have members)
+   - Java: `class`, `interface`, `enum`
+   - NOT: `variable`, `field`, `method` (these ARE members, not containers)
+
+2. **Member definition:** What qualifies as a "member"?
+   - For classes: fields and methods (including static, class, property)
+   - For enums: enum constants/values
+   - Nested classes are members
+   - Module-level items are NOT members of the module
+
+3. **Trigger semantics:** Should trigger if:
+   - ANY member has STRUCTURAL or CONTENT change
+   - ANY member is MISSING (removed)
+   - ANY new member is ADDED
+   - Container itself has structural changes (rename, decorators, inheritance)
+
+4. **Unchanged containers:** If the container and all its members are unchanged (only cosmetic changes like whitespace), the subscription should remain in `unchanged`, not trigger.
+
+**UI/UX constraints:**
+
+1. **CLI clarity:** The `--include-members` flag should be clearly documented in `codesub add --help`.
+
+2. **Listing:** `codesub list` should indicate when a subscription is aggregate/container-based.
+
+3. **Symbols command:** `codesub symbols` should continue to list individual constructs, but potentially add a flag to show "containable" constructs.
+
+## Acceptance Criteria
+
+- [ ] Users can create container subscriptions with `codesub add path::Container --include-members`
+- [ ] Container subscriptions trigger when ANY member changes (STRUCTURAL, CONTENT, MISSING, or ADDED)
+- [ ] Trigger details include a list of specific members that changed, with their change types
+- [ ] Container subscriptions do NOT trigger for unchanged containers (even if scanned)
+- [ ] Existing single-construct semantic subscriptions continue to work unchanged
+- [ ] The `include_members` flag is optional and defaults to `false` (current behavior)
+- [ ] API endpoint `POST /api/subscriptions` accepts `include_members` parameter
+- [ ] Subscription JSON schema includes `include_members: bool` field
+- [ ] Attempting to use `--include-members` on a non-container construct (field, method) returns clear error
+- [ ] Container subscriptions work for both Python and Java
+- [ ] Update proposals correctly update line ranges when containers move in the file
+- [ ] Cross-file movement detection works for containers with members
+
+## Affected Areas
+
+**Core detection logic:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/detector.py` - `_check_semantic()` method needs container-aware logic
+- `/Users/vlad/dev/projects/codesub/src/codesub/models.py` - `Subscription` model needs `include_members` field
+- `/Users/vlad/dev/projects/codesub/src/codesub/models.py` - `Trigger` details format for aggregate changes
+
+**Subscription creation:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/cli.py` - `cmd_add()` needs `--include-members` flag
+- `/Users/vlad/dev/projects/codesub/src/codesub/cli.py` - `_add_semantic_subscription()` validation for container kinds
+- `/Users/vlad/dev/projects/codesub/src/codesub/api.py` - `SubscriptionCreateRequest` schema
+
+**Semantic indexing:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/semantic/python_indexer.py` - May need helper to get all members of a container
+- `/Users/vlad/dev/projects/codesub/src/codesub/semantic/java_indexer.py` - May need helper to get all members of a container
+- `/Users/vlad/dev/projects/codesub/src/codesub/semantic/indexer_protocol.py` - Consider adding `get_container_members()` protocol method
+
+**Display and formatting:**
+- `/Users/vlad/dev/projects/codesub/src/codesub/utils.py` - `format_subscription()` should show container status
+- `/Users/vlad/dev/projects/codesub/src/codesub/update_doc.py` - Formatting of aggregate trigger details
+
+**Tests:**
+- New test file: `tests/test_container_subscriptions.py`
+- Integration tests for Python and Java container tracking
+- Edge cases: empty classes, single-member enums, nested classes
+
+## Questions
+
+1. **Granularity of "new member" detection:** Should adding a new member always trigger, or only if it's a "public" member (not starting with `_` in Python)?
+
+2. **Decorators on members:** If a method decorator changes (e.g., `@property` → `@staticmethod`), should this be considered a STRUCTURAL change at the member level, or should it trigger at the container level as a "member role changed"?
+
+3. **Nested classes:** If a class contains a nested class, should the nested class be considered a "member" for aggregate tracking? Or should nested classes require their own subscription?
+
+4. **Module-level aggregation:** Should we support `--include-members` for an entire module/file (tracking all top-level constructs)? Or is this scope creep?
+
+5. **Baseline member snapshot:** Should we store the list of member qualnames at subscription creation time, or dynamically discover them at scan time? Storing at creation allows detection of "new members added", but makes the subscription data larger.
+
+6. **Partial matching:** If a class has 20 members and only 1 changed, should the trigger report all 20 members (with 19 marked "unchanged") or only the 1 that changed? The former is more informative but verbose.
+
+---
+
+## File References
+
+All file paths referenced in this document are absolute paths within the project:
+- `/Users/vlad/dev/projects/codesub/src/codesub/models.py` - Data models
+- `/Users/vlad/dev/projects/codesub/src/codesub/detector.py` - Change detection logic
+- `/Users/vlad/dev/projects/codesub/src/codesub/cli.py` - CLI interface
+- `/Users/vlad/dev/projects/codesub/src/codesub/api.py` - REST API
+- `/Users/vlad/dev/projects/codesub/src/codesub/semantic/python_indexer.py` - Python construct extraction
+- `/Users/vlad/dev/projects/codesub/src/codesub/semantic/java_indexer.py` - Java construct extraction
+- `/Users/vlad/dev/projects/codesub/src/codesub/utils.py` - Utility functions
+- `/Users/vlad/dev/projects/codesub/src/codesub/update_doc.py` - Update document generation
+</file>
+
+<file path="src/codesub/semantic/construct.py">
+"""Construct dataclass for semantic code analysis."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Construct:
+    """A parsed code construct.
+
+    Represents a semantic unit extracted from source code, such as a
+    class, method, field, or variable. Used for semantic subscriptions
+    that track code by identity rather than line numbers.
+
+    Attributes:
+        path: File path where the construct is defined.
+        kind: Type of construct. Valid values:
+            - "variable": Module-level variable
+            - "field": Class field or attribute
+            - "method": Method or function within a class
+            - "class": Class declaration
+            - "interface": Interface declaration (Java)
+            - "enum": Enum declaration
+        qualname: Qualified name of the construct.
+            - Simple: "MAX_RETRIES", "User"
+            - Nested: "User.role", "Calculator.add(int,int)"
+            - Java overloads include param types: "add(int,int)"
+        role: Optional role modifier.
+            - "const": For constants (UPPER_CASE naming)
+            - None: For regular constructs
+        start_line: 1-based start line number.
+        end_line: 1-based end line number (inclusive).
+        interface_hash: Hash of the construct's interface/signature.
+            Changes indicate structural changes (type annotations, parameters).
+        body_hash: Hash of the construct's body/value.
+            Changes indicate content changes (implementation, value).
+        has_parse_error: True if the file had parse errors.
+    """
+
+    path: str
+    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "Calculator.add(int,int)"
+    role: str | None  # "const" for constants
+    start_line: int
+    end_line: int
+    interface_hash: str
+    body_hash: str
+    has_parse_error: bool = False
+</file>
+
+<file path="src/codesub/semantic/indexer_protocol.py">
+"""Protocol definition for semantic indexers."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from .construct import Construct
+
+
+class SemanticIndexer(Protocol):
+    """Protocol for language-specific semantic indexers.
+
+    Implementations extract semantic constructs from source code,
+    enabling semantic subscriptions that track code by identity
+    rather than line numbers.
+
+    Each implementation handles a specific programming language
+    (e.g., PythonIndexer, JavaIndexer).
+    """
+
+    def index_file(self, source: str, path: str) -> list[Construct]:
+        """Extract all constructs from source code.
+
+        Args:
+            source: The complete source code content.
+            path: File path (used in construct metadata).
+
+        Returns:
+            List of all discoverable constructs in the file.
+        """
+        ...
+
+    def find_construct(
+        self, source: str, path: str, qualname: str, kind: str | None = None
+    ) -> Construct | None:
+        """Find a specific construct by qualified name.
+
+        Args:
+            source: The complete source code content.
+            path: File path (used in construct metadata).
+            qualname: Qualified name to search for (e.g., "User.validate").
+            kind: Optional kind filter for disambiguation.
+
+        Returns:
+            The matching construct, or None if not found or ambiguous.
+        """
+        ...
+</file>
+
+<file path="src/codesub/semantic/java_indexer.py">
+"""Java construct extraction using Tree-sitter."""
+
+from __future__ import annotations
+
+import tree_sitter
+import tree_sitter_java as tsjava
+
+from .construct import Construct
+from .fingerprint import compute_body_hash, compute_interface_hash
+
+
+class JavaIndexer:
+    """Extracts constructs from Java source code.
+
+    Supports:
+    - Type declarations: class, interface, enum
+    - Fields (including multi-declarator: int x, y;)
+    - Methods with overload-safe qualnames: Calculator.add(int,int)
+    - Constructors: User.User(String)
+    - Enum constants as field with role="const"
+    - Nested classes: Outer.Inner.method()
+    - Annotations affect interface_hash
+    """
+
+    def __init__(self) -> None:
+        self._language = tree_sitter.Language(tsjava.language())
+        self._parser = tree_sitter.Parser(self._language)
+
+    def index_file(self, source: str, path: str) -> list[Construct]:
+        """Extract all constructs from source code."""
+        tree = self._parser.parse(source.encode())
+        has_errors = self._has_errors(tree.root_node)
+        source_bytes = source.encode()
+
+        constructs: list[Construct] = []
+
+        # Process top-level declarations
+        for child in tree.root_node.children:
+            constructs.extend(
+                self._extract_declaration(child, source_bytes, path, has_errors, [])
+            )
+
+        return constructs
+
+    def find_construct(
+        self, source: str, path: str, qualname: str, kind: str | None = None
+    ) -> Construct | None:
+        """Find a specific construct by qualname."""
+        constructs = self.index_file(source, path)
+        matches = [c for c in constructs if c.qualname == qualname]
+        if kind:
+            matches = [c for c in matches if c.kind == kind]
+        return matches[0] if len(matches) == 1 else None
+
+    def _has_errors(self, node: tree_sitter.Node) -> bool:
+        """Check if tree contains ERROR or MISSING nodes."""
+        if node.type == "ERROR" or node.is_missing:
+            return True
+        return any(self._has_errors(child) for child in node.children)
+
+    def _extract_declaration(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> list[Construct]:
+        """Extract constructs from a declaration node."""
+        constructs: list[Construct] = []
+
+        if node.type == "class_declaration":
+            constructs.extend(
+                self._extract_class(node, source_bytes, path, has_errors, scope, "class")
+            )
+        elif node.type == "interface_declaration":
+            constructs.extend(
+                self._extract_class(node, source_bytes, path, has_errors, scope, "interface")
+            )
+        elif node.type == "enum_declaration":
+            constructs.extend(
+                self._extract_enum(node, source_bytes, path, has_errors, scope)
+            )
+        elif node.type == "field_declaration":
+            constructs.extend(
+                self._extract_field(node, source_bytes, path, has_errors, scope)
+            )
+        elif node.type == "method_declaration":
+            construct = self._extract_method(node, source_bytes, path, has_errors, scope)
+            if construct:
+                constructs.append(construct)
+        elif node.type == "constructor_declaration":
+            construct = self._extract_constructor(node, source_bytes, path, has_errors, scope)
+            if construct:
+                constructs.append(construct)
+
+        return constructs
+
+    def _extract_class(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+        kind: str,
+    ) -> list[Construct]:
+        """Extract class/interface declaration and its members."""
+        constructs: list[Construct] = []
+
+        name = self._get_name(node)
+        if not name:
+            return constructs
+
+        qualname = ".".join(scope + [name])
+
+        # Get decorators (annotations)
+        decorators = self._get_annotations(node, source_bytes)
+
+        # Get modifiers and superclass/interfaces for interface_hash
+        modifiers = self._get_modifiers(node, source_bytes)
+        superclass = node.child_by_field_name("superclass")
+        interfaces = node.child_by_field_name("interfaces")
+
+        annotation_text = None
+        parts = []
+        if superclass:
+            parts.append(f"extends {self._node_text(superclass, source_bytes)}")
+        if interfaces:
+            parts.append(self._node_text(interfaces, source_bytes))
+        if parts:
+            annotation_text = " ".join(parts)
+
+        interface_hash = compute_interface_hash(
+            kind,
+            annotation=annotation_text,
+            decorators=modifiers + decorators,
+        )
+
+        # Body hash includes the class signature but not members
+        # For class detection, use the class header as body
+        body_hash = compute_body_hash(None, source_bytes)
+
+        constructs.append(
+            Construct(
+                path=path,
+                kind=kind,
+                qualname=qualname,
+                role=None,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                interface_hash=interface_hash,
+                body_hash=body_hash,
+                has_parse_error=has_errors,
+            )
+        )
+
+        # Process class body for members
+        body = node.child_by_field_name("body")
+        if body:
+            new_scope = scope + [name]
+            for child in body.children:
+                constructs.extend(
+                    self._extract_declaration(
+                        child, source_bytes, path, has_errors, new_scope
+                    )
+                )
+
+        return constructs
+
+    def _extract_enum(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> list[Construct]:
+        """Extract enum declaration and its constants."""
+        constructs: list[Construct] = []
+
+        name = self._get_name(node)
+        if not name:
+            return constructs
+
+        qualname = ".".join(scope + [name])
+
+        # Get decorators (annotations)
+        decorators = self._get_annotations(node, source_bytes)
+        modifiers = self._get_modifiers(node, source_bytes)
+
+        # Get interfaces if enum implements any
+        interfaces = node.child_by_field_name("interfaces")
+        annotation_text = self._node_text(interfaces, source_bytes) if interfaces else None
+
+        interface_hash = compute_interface_hash(
+            "enum",
+            annotation=annotation_text,
+            decorators=modifiers + decorators,
+        )
+        body_hash = compute_body_hash(None, source_bytes)
+
+        constructs.append(
+            Construct(
+                path=path,
+                kind="enum",
+                qualname=qualname,
+                role=None,
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                interface_hash=interface_hash,
+                body_hash=body_hash,
+                has_parse_error=has_errors,
+            )
+        )
+
+        # Process enum body
+        body = node.child_by_field_name("body")
+        if body:
+            new_scope = scope + [name]
+            for child in body.children:
+                if child.type == "enum_constant":
+                    construct = self._extract_enum_constant(
+                        child, source_bytes, path, has_errors, new_scope
+                    )
+                    if construct:
+                        constructs.append(construct)
+                else:
+                    # Process other members (methods, fields)
+                    constructs.extend(
+                        self._extract_declaration(
+                            child, source_bytes, path, has_errors, new_scope
+                        )
+                    )
+
+        return constructs
+
+    def _extract_enum_constant(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> Construct | None:
+        """Extract an enum constant as a field with role='const'."""
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return None
+
+        name = self._node_text(name_node, source_bytes)
+        qualname = ".".join(scope + [name])
+
+        # Get annotations on the enum constant
+        decorators = self._get_annotations(node, source_bytes)
+
+        interface_hash = compute_interface_hash(
+            "field",
+            annotation=None,
+            decorators=decorators,
+        )
+
+        # Body hash includes arguments if present
+        arguments = node.child_by_field_name("arguments")
+        body_hash = compute_body_hash(arguments, source_bytes)
+
+        return Construct(
+            path=path,
+            kind="field",
+            qualname=qualname,
+            role="const",
+            start_line=node.start_point[0] + 1,
+            end_line=node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def _extract_field(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> list[Construct]:
+        """Extract field declarations, handling multi-declarator cases."""
+        constructs: list[Construct] = []
+
+        # Get type and modifiers
+        type_node = node.child_by_field_name("type")
+        type_text = self._node_text(type_node, source_bytes) if type_node else None
+
+        decorators = self._get_annotations(node, source_bytes)
+        modifiers = self._get_modifiers(node, source_bytes)
+
+        # Check if it's a constant (static final)
+        is_const = "static" in modifiers and "final" in modifiers
+
+        # Find all declarators
+        for child in node.children:
+            if child.type == "variable_declarator":
+                name_node = child.child_by_field_name("name")
+                if not name_node:
+                    continue
+
+                name = self._node_text(name_node, source_bytes)
+                qualname = ".".join(scope + [name])
+
+                # Interface hash includes type and modifiers
+                interface_hash = compute_interface_hash(
+                    "field",
+                    annotation=type_text,
+                    decorators=modifiers + decorators,
+                )
+
+                # Body hash includes the initializer value
+                value_node = child.child_by_field_name("value")
+                body_hash = compute_body_hash(value_node, source_bytes)
+
+                constructs.append(
+                    Construct(
+                        path=path,
+                        kind="field",
+                        qualname=qualname,
+                        role="const" if is_const else None,
+                        start_line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        interface_hash=interface_hash,
+                        body_hash=body_hash,
+                        has_parse_error=has_errors,
+                    )
+                )
+
+        return constructs
+
+    def _extract_method(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> Construct | None:
+        """Extract method declaration with overload-safe qualname."""
+        name = self._get_name(node)
+        if not name:
+            return None
+
+        # Build qualname with parameter types for overload distinction
+        params_node = node.child_by_field_name("parameters")
+        param_types = self._extract_param_types(params_node, source_bytes)
+        qualname = ".".join(scope + [f"{name}({','.join(param_types)})"])
+
+        # Get return type
+        return_type = node.child_by_field_name("type")
+        return_text = self._node_text(return_type, source_bytes) if return_type else "void"
+
+        # Get decorators and modifiers
+        decorators = self._get_annotations(node, source_bytes)
+        modifiers = self._get_modifiers(node, source_bytes)
+
+        # Get throws clause
+        throws = None
+        for child in node.children:
+            if child.type == "throws":
+                throws = self._node_text(child, source_bytes)
+                break
+
+        annotation_parts = [return_text]
+        if throws:
+            annotation_parts.append(throws)
+
+        interface_hash = compute_interface_hash(
+            "method",
+            annotation=" ".join(annotation_parts),
+            decorators=modifiers + decorators,
+            params_node=params_node,
+            source_bytes=source_bytes,
+        )
+
+        # Body hash includes method body
+        body_node = node.child_by_field_name("body")
+        body_hash = compute_body_hash(body_node, source_bytes)
+
+        return Construct(
+            path=path,
+            kind="method",
+            qualname=qualname,
+            role=None,
+            start_line=node.start_point[0] + 1,
+            end_line=node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def _extract_constructor(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        scope: list[str],
+    ) -> Construct | None:
+        """Extract constructor declaration."""
+        name = self._get_name(node)
+        if not name:
+            return None
+
+        # Build qualname with parameter types
+        params_node = node.child_by_field_name("parameters")
+        param_types = self._extract_param_types(params_node, source_bytes)
+        qualname = ".".join(scope + [f"{name}({','.join(param_types)})"])
+
+        # Get decorators and modifiers
+        decorators = self._get_annotations(node, source_bytes)
+        modifiers = self._get_modifiers(node, source_bytes)
+
+        # Get throws clause
+        throws = None
+        for child in node.children:
+            if child.type == "throws":
+                throws = self._node_text(child, source_bytes)
+                break
+
+        interface_hash = compute_interface_hash(
+            "method",
+            annotation=throws,
+            decorators=modifiers + decorators,
+            params_node=params_node,
+            source_bytes=source_bytes,
+        )
+
+        # Body hash includes constructor body
+        body_node = node.child_by_field_name("body")
+        body_hash = compute_body_hash(body_node, source_bytes)
+
+        return Construct(
+            path=path,
+            kind="method",
+            qualname=qualname,
+            role=None,
+            start_line=node.start_point[0] + 1,
+            end_line=node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def _extract_param_types(
+        self, params_node: tree_sitter.Node | None, source_bytes: bytes
+    ) -> list[str]:
+        """Extract parameter types for overload-safe qualnames."""
+        if not params_node:
+            return []
+
+        types: list[str] = []
+        for child in params_node.children:
+            if child.type == "formal_parameter":
+                type_node = child.child_by_field_name("type")
+                if type_node:
+                    type_text = self._node_text(type_node, source_bytes)
+                    # Normalize arrays and generics
+                    type_text = type_text.replace(" ", "")
+                    types.append(type_text)
+            elif child.type == "spread_parameter":
+                # spread_parameter has type_identifier child, not "type" field
+                type_text = None
+                for subchild in child.children:
+                    if subchild.type in ("type_identifier", "generic_type", "array_type"):
+                        type_text = self._node_text(subchild, source_bytes)
+                        break
+                if type_text:
+                    type_text = type_text.replace(" ", "") + "..."
+                    types.append(type_text)
+
+        return types
+
+    def _get_annotations(
+        self, node: tree_sitter.Node, source_bytes: bytes
+    ) -> list[str]:
+        """Get annotation decorators for a node."""
+        annotations: list[str] = []
+
+        # Look for annotations as previous siblings or first children
+        for child in node.children:
+            if child.type in ("marker_annotation", "annotation"):
+                annotations.append(self._node_text(child, source_bytes))
+
+        return annotations
+
+    def _get_modifiers(
+        self, node: tree_sitter.Node, source_bytes: bytes
+    ) -> list[str]:
+        """Get modifiers (public, static, final, etc.) for a node."""
+        modifiers: list[str] = []
+
+        for child in node.children:
+            if child.type == "modifiers":
+                for mod in child.children:
+                    if mod.type not in ("marker_annotation", "annotation"):
+                        text = self._node_text(mod, source_bytes)
+                        if text:
+                            modifiers.append(text)
+        return modifiers
+
+    def _get_name(self, node: tree_sitter.Node) -> str | None:
+        """Get name from a declaration node."""
+        name_node = node.child_by_field_name("name")
+        if name_node and name_node.text:
+            return name_node.text.decode()
+        return None
+
+    def _node_text(self, node: tree_sitter.Node, source_bytes: bytes) -> str:
+        """Get text content of a node."""
+        return source_bytes[node.start_byte:node.end_byte].decode()
+</file>
+
+<file path="src/codesub/semantic/python_indexer.py">
+"""Python construct extraction using Tree-sitter."""
+
+from __future__ import annotations
+
+import re
+
+import tree_sitter
+import tree_sitter_python as tspython
+
+from .construct import Construct
+from .fingerprint import compute_body_hash, compute_interface_hash
+
+
+class PythonIndexer:
+    """Extracts constructs from Python source code."""
+
+    def __init__(self) -> None:
+        self._language = tree_sitter.Language(tspython.language())
+        self._parser = tree_sitter.Parser(self._language)
+
+    def index_file(self, source: str, path: str) -> list[Construct]:
+        """Extract all constructs from source code."""
+        tree = self._parser.parse(source.encode())
+        has_errors = self._has_errors(tree.root_node)
+        constructs: list[Construct] = []
+
+        source_bytes = source.encode()
+
+        # Extract module-level assignments (variables/constants)
+        constructs.extend(
+            self._extract_module_assignments(tree.root_node, source_bytes, path, has_errors)
+        )
+
+        # Extract classes with their fields and methods
+        constructs.extend(
+            self._extract_classes(tree.root_node, source_bytes, path, has_errors)
+        )
+
+        return constructs
+
+    def find_construct(
+        self, source: str, path: str, qualname: str, kind: str | None = None
+    ) -> Construct | None:
+        """Find a specific construct by qualname."""
+        constructs = self.index_file(source, path)
+        matches = [c for c in constructs if c.qualname == qualname]
+        if kind:
+            matches = [c for c in matches if c.kind == kind]
+        return matches[0] if len(matches) == 1 else None
+
+    def _has_errors(self, node: tree_sitter.Node) -> bool:
+        """Check if tree contains ERROR nodes."""
+        if node.type == "ERROR":
+            return True
+        return any(self._has_errors(child) for child in node.children)
+
+    def _extract_module_assignments(
+        self,
+        root: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+    ) -> list[Construct]:
+        """Extract module-level variable/constant assignments."""
+        constructs: list[Construct] = []
+
+        for child in root.children:
+            # Handle: NAME = value
+            if child.type == "expression_statement":
+                expr = child.children[0] if child.children else None
+                if expr and expr.type == "assignment":
+                    construct = self._parse_assignment(
+                        expr, source_bytes, path, None, has_errors
+                    )
+                    if construct:
+                        constructs.append(construct)
+
+        return constructs
+
+    def _extract_classes(
+        self,
+        root: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+    ) -> list[Construct]:
+        """Extract classes with their fields and methods."""
+        constructs: list[Construct] = []
+
+        for child in root.children:
+            # Handle both plain class_definition and decorated classes
+            class_node = None
+            if child.type == "class_definition":
+                class_node = child
+            elif child.type == "decorated_definition":
+                # Find the class_definition inside the decorated_definition
+                for inner in child.children:
+                    if inner.type == "class_definition":
+                        class_node = inner
+                        break
+
+            if class_node is None:
+                continue
+
+            class_name = self._get_name(class_node)
+            if not class_name:
+                continue
+
+            # Get class body
+            body = class_node.child_by_field_name("body")
+            if not body:
+                continue
+
+            for member in body.children:
+                    # Class field: x = value
+                    if member.type == "expression_statement":
+                        expr = member.children[0] if member.children else None
+                        if expr and expr.type == "assignment":
+                            construct = self._parse_assignment(
+                                expr, source_bytes, path, class_name, has_errors
+                            )
+                            if construct:
+                                constructs.append(construct)
+
+                    # Method: def name(...): ...
+                    elif member.type == "function_definition":
+                        construct = self._parse_method(
+                            member, source_bytes, path, class_name, has_errors
+                        )
+                        if construct:
+                            constructs.append(construct)
+
+                    # Decorated method: @decorator def name(...): ...
+                    elif member.type == "decorated_definition":
+                        func = None
+                        for c in member.children:
+                            if c.type == "function_definition":
+                                func = c
+                                break
+                        if func:
+                            construct = self._parse_method(
+                                func,
+                                source_bytes,
+                                path,
+                                class_name,
+                                has_errors,
+                                decorated_node=member,
+                            )
+                            if construct:
+                                constructs.append(construct)
+
+        return constructs
+
+    def _parse_assignment(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        class_name: str | None,
+        has_errors: bool,
+    ) -> Construct | None:
+        """Parse: NAME = value  OR  NAME: type = value  OR  NAME: type"""
+        # In tree-sitter-python 0.25+, type annotations are children of assignment nodes
+        # Structure: assignment { identifier, ":", type, "=", value }
+        # Or: assignment { identifier, ":", type } (annotation without value)
+        # Or: assignment { identifier, "=", value } (plain assignment)
+
+        # Find the identifier (first child that's an identifier)
+        name_node = None
+        type_node = None
+        value_node = None
+
+        for child in node.children:
+            if child.type == "identifier" and name_node is None:
+                name_node = child
+            elif child.type == "type":
+                type_node = child
+
+        # Try field-based access for left/right (works for plain assignments)
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+
+        # Use field-based name if available, otherwise use first identifier
+        if left and left.type == "identifier":
+            name_node = left
+        if right:
+            value_node = right
+
+        # For annotated assignments, the value might be the last non-punctuation child
+        if value_node is None and type_node is not None:
+            # Find value after the "=" sign
+            found_equals = False
+            for child in node.children:
+                if child.type == "=":
+                    found_equals = True
+                elif found_equals and child.type not in (":", "=", "type"):
+                    value_node = child
+                    break
+
+        if not name_node or name_node.type != "identifier":
+            return None
+
+        name = self._node_text(name_node, source_bytes)
+        qualname = f"{class_name}.{name}" if class_name else name
+        kind = "field" if class_name else "variable"
+        role = "const" if self._is_constant_name(name) else None
+
+        # interface_hash: includes type annotation if present
+        annotation = None
+        if type_node:
+            annotation = self._node_text(type_node, source_bytes)
+        interface_hash = compute_interface_hash(kind, annotation=annotation, decorators=[])
+
+        # body_hash: the RHS value (or "<no-default>" if no value)
+        if value_node:
+            body_hash = compute_body_hash(value_node, source_bytes)
+        else:
+            body_hash = compute_body_hash(None, source_bytes)
+
+        return Construct(
+            path=path,
+            kind=kind,
+            qualname=qualname,
+            role=role,
+            start_line=node.start_point[0] + 1,
+            end_line=node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def _parse_method(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        class_name: str,
+        has_errors: bool,
+        decorated_node: tree_sitter.Node | None = None,
+    ) -> Construct | None:
+        """Parse method definition."""
+        name = self._get_name(node)
+        if not name:
+            return None
+
+        qualname = f"{class_name}.{name}"
+
+        # Get decorators
+        decorators: list[str] = []
+        if decorated_node:
+            for child in decorated_node.children:
+                if child.type == "decorator":
+                    decorators.append(self._node_text(child, source_bytes))
+
+        # Get parameters for interface_hash
+        params_node = node.child_by_field_name("parameters")
+        return_type = node.child_by_field_name("return_type")
+
+        interface_hash = compute_interface_hash(
+            "method",
+            annotation=self._node_text(return_type, source_bytes) if return_type else None,
+            decorators=decorators,
+            params_node=params_node,
+            source_bytes=source_bytes,
+        )
+
+        # Get body for body_hash
+        body_node = node.child_by_field_name("body")
+        body_hash = compute_body_hash(body_node, source_bytes) if body_node else ""
+
+        use_node = decorated_node or node
+        return Construct(
+            path=path,
+            kind="method",
+            qualname=qualname,
+            role=None,
+            start_line=use_node.start_point[0] + 1,
+            end_line=use_node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def _get_name(self, node: tree_sitter.Node) -> str | None:
+        """Get name from class/function definition."""
+        name_node = node.child_by_field_name("name")
+        if name_node:
+            return name_node.text.decode() if name_node.text else None
+        return None
+
+    def _node_text(self, node: tree_sitter.Node, source_bytes: bytes) -> str:
+        """Get text content of a node."""
+        return source_bytes[node.start_byte : node.end_byte].decode()
+
+    def _is_constant_name(self, name: str) -> bool:
+        """Check if name follows CONSTANT_CASE convention."""
+        return bool(re.match(r"^[A-Z][A-Z0-9_]*$", name))
+</file>
+
+<file path="src/codesub/update_doc.py">
+"""Update document generation for codesub."""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .models import Proposal, ScanResult, Trigger
+
+
+def result_to_dict(result: ScanResult) -> dict[str, Any]:
+    """
+    Convert a ScanResult to a dictionary for JSON serialization.
+
+    Args:
+        result: The scan result.
+
+    Returns:
+        Dictionary representation.
+    """
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "base_ref": result.base_ref,
+        "target_ref": result.target_ref,
+        "triggers": [_trigger_to_dict(t) for t in result.triggers],
+        "proposals": [_proposal_to_dict(p) for p in result.proposals],
+    }
+
+
+def _trigger_to_dict(trigger: Trigger) -> dict[str, Any]:
+    """Convert a Trigger to a dictionary."""
+    result = {
+        "subscription_id": trigger.subscription_id,
+        "path": trigger.path,
+        "start_line": trigger.start_line,
+        "end_line": trigger.end_line,
+        "reasons": trigger.reasons,
+        "label": trigger.subscription.label,
+        "matching_hunks": [
+            {
+                "old_start": h.old_start,
+                "old_count": h.old_count,
+                "new_start": h.new_start,
+                "new_count": h.new_count,
+            }
+            for h in trigger.matching_hunks
+        ],
+    }
+    # Add semantic-specific fields if present
+    if trigger.change_type is not None:
+        result["change_type"] = trigger.change_type
+    if trigger.details is not None:
+        result["details"] = trigger.details
+    return result
+
+
+def _proposal_to_dict(proposal: Proposal) -> dict[str, Any]:
+    """Convert a Proposal to a dictionary."""
+    result = {
+        "subscription_id": proposal.subscription_id,
+        "old_path": proposal.old_path,
+        "old_start": proposal.old_start,
+        "old_end": proposal.old_end,
+        "new_path": proposal.new_path,
+        "new_start": proposal.new_start,
+        "new_end": proposal.new_end,
+        "reasons": proposal.reasons,
+        "confidence": proposal.confidence,
+        "shift": proposal.shift,
+        "label": proposal.subscription.label,
+    }
+    # Add semantic-specific fields if present
+    if proposal.new_qualname is not None:
+        result["new_qualname"] = proposal.new_qualname
+    if proposal.new_kind is not None:
+        result["new_kind"] = proposal.new_kind
+    return result
+
+
+def write_update_doc(result: ScanResult, path: str | Path) -> None:
+    """
+    Write a JSON update document.
+
+    Args:
+        result: The scan result.
+        path: Path to write the document.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    data = result_to_dict(result)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def write_markdown_doc(result: ScanResult, path: str | Path) -> None:
+    """
+    Write a human-readable markdown summary.
+
+    Args:
+        result: The scan result.
+        path: Path to write the document.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "# Code Subscription Scan Report",
+        "",
+        f"**Base:** `{result.base_ref[:12]}`",
+        f"**Target:** `{result.target_ref[:12]}`",
+        f"**Generated:** {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+        "",
+    ]
+
+    # Summary
+    lines.extend([
+        "## Summary",
+        "",
+        f"- **Triggered:** {len(result.triggers)}",
+        f"- **Proposed Updates:** {len(result.proposals)}",
+        f"- **Unchanged:** {len(result.unchanged)}",
+        "",
+    ])
+
+    # Triggered subscriptions
+    if result.triggers:
+        lines.extend([
+            "## Triggered Subscriptions",
+            "",
+            "These subscriptions were triggered because the watched lines were modified:",
+            "",
+        ])
+
+        for trigger in result.triggers:
+            label = f" ({trigger.subscription.label})" if trigger.subscription.label else ""
+            location = f"{trigger.path}:{trigger.start_line}-{trigger.end_line}"
+            reasons = ", ".join(trigger.reasons)
+            lines.extend([
+                f"### `{trigger.subscription_id[:8]}`{label}",
+                "",
+                f"- **Location:** `{location}`",
+                f"- **Reason:** {reasons}",
+            ])
+            if trigger.subscription.description:
+                lines.append(f"- **Description:** {trigger.subscription.description}")
+
+            if trigger.subscription.anchors:
+                lines.extend([
+                    "",
+                    "**Watched lines:**",
+                    "```",
+                ])
+                lines.extend(trigger.subscription.anchors.lines)
+                lines.extend(["```", ""])
+            else:
+                lines.append("")
+
+    # Proposed updates
+    if result.proposals:
+        lines.extend([
+            "## Proposed Updates",
+            "",
+            "These subscriptions need their locations updated (no content changes):",
+            "",
+        ])
+
+        for prop in result.proposals:
+            label = f" ({prop.subscription.label})" if prop.subscription.label else ""
+            old_loc = f"{prop.old_path}:{prop.old_start}-{prop.old_end}"
+            new_loc = f"{prop.new_path}:{prop.new_start}-{prop.new_end}"
+            reasons = ", ".join(prop.reasons)
+
+            lines.extend([
+                f"### `{prop.subscription_id[:8]}`{label}",
+                "",
+                f"- **Old:** `{old_loc}`",
+                f"- **New:** `{new_loc}`",
+                f"- **Reason:** {reasons}",
+            ])
+            if prop.shift:
+                lines.append(f"- **Shift:** {prop.shift:+d} lines")
+            lines.append("")
+
+    # Unchanged subscriptions
+    if result.unchanged:
+        lines.extend([
+            "## Unchanged Subscriptions",
+            "",
+            "These subscriptions were not affected by changes:",
+            "",
+        ])
+
+        for sub in result.unchanged:
+            label = f" ({sub.label})" if sub.label else ""
+            location = f"{sub.path}:{sub.start_line}-{sub.end_line}"
+            lines.append(f"- `{sub.id[:8]}`{label} - `{location}`")
+
+        lines.append("")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+</file>
+
+<file path="src/codesub/updater.py">
+"""Updater for applying proposals to subscriptions."""
+
+from typing import Any
+
+from .config_store import ConfigStore
+from .errors import SubscriptionNotFoundError
+from .git_repo import GitRepo
+from .models import Anchor, _utc_now
+from .utils import extract_anchors
+
+
+class Updater:
+    """Applies update proposals to subscriptions."""
+
+    def __init__(self, store: ConfigStore, repo: GitRepo):
+        self.store = store
+        self.repo = repo
+
+    def apply(
+        self,
+        update_data: dict[str, Any],
+        dry_run: bool = False,
+    ) -> tuple[list[str], list[str]]:
+        """
+        Apply update proposals from an update document.
+
+        Args:
+            update_data: Parsed JSON update document.
+            dry_run: If True, don't actually modify anything.
+
+        Returns:
+            Tuple of (applied_ids, warnings):
+            - applied_ids: List of subscription IDs that were updated.
+            - warnings: List of warning messages.
+        """
+        proposals = update_data.get("proposals", [])
+        target_ref = update_data.get("target_ref", "")
+
+        if not proposals:
+            return [], []
+
+        if not target_ref:
+            return [], ["No target_ref in update document"]
+
+        applied: list[str] = []
+        warnings: list[str] = []
+
+        config = self.store.load()
+
+        # Build subscription lookup
+        sub_by_id = {s.id: s for s in config.subscriptions}
+
+        for prop in proposals:
+            sub_id = prop.get("subscription_id", "")
+            new_path = prop.get("new_path", "")
+            new_start = prop.get("new_start", 0)
+            new_end = prop.get("new_end", 0)
+
+            # Find subscription
+            sub = sub_by_id.get(sub_id)
+            if not sub:
+                warnings.append(f"Subscription {sub_id[:8]} not found, skipping")
+                continue
+
+            # Validate new location
+            try:
+                new_lines = self.repo.show_file(target_ref, new_path)
+            except Exception as e:
+                warnings.append(
+                    f"Cannot read {new_path} at {target_ref[:12]} for {sub_id[:8]}: {e}"
+                )
+                continue
+
+            if new_start < 1:
+                warnings.append(
+                    f"New range {new_start}-{new_end} starts before line 1 "
+                    f"for {sub_id[:8]}"
+                )
+                continue
+
+            if new_end > len(new_lines):
+                warnings.append(
+                    f"New range {new_start}-{new_end} exceeds file length "
+                    f"({len(new_lines)} lines) for {sub_id[:8]}"
+                )
+                continue
+
+            # Optional: verify anchor content matches (warning only)
+            if sub.anchors and sub.anchors.lines:
+                old_content = "\n".join(sub.anchors.lines).strip()
+                new_content = "\n".join(
+                    new_lines[new_start - 1 : new_end]
+                ).strip()
+
+                # Simple content check - warn if significantly different
+                if old_content != new_content:
+                    # Check if at least some overlap exists
+                    old_words = set(old_content.split())
+                    new_words = set(new_content.split())
+                    if old_words and new_words:
+                        overlap = len(old_words & new_words) / len(old_words)
+                        if overlap < 0.5:
+                            warnings.append(
+                                f"Content at new location for {sub_id[:8]} differs "
+                                f"significantly from original (overlap: {overlap:.0%})"
+                            )
+
+            if not dry_run:
+                # Update subscription
+                sub.path = new_path
+                sub.start_line = new_start
+                sub.end_line = new_end
+                sub.updated_at = _utc_now()
+
+                # Update semantic target if qualname changed (construct was renamed)
+                new_qualname = prop.get("new_qualname")
+                new_kind = prop.get("new_kind")
+                if sub.semantic and (new_qualname or new_kind):
+                    if new_qualname:
+                        sub.semantic.qualname = new_qualname
+                    if new_kind:
+                        sub.semantic.kind = new_kind
+
+                # Re-snapshot anchors
+                context_before, watched_lines, context_after = extract_anchors(
+                    new_lines, new_start, new_end, context=2
+                )
+                sub.anchors = Anchor(
+                    context_before=context_before,
+                    lines=watched_lines,
+                    context_after=context_after,
+                )
+
+            applied.append(sub_id)
+
+        # Save changes and update baseline
+        if not dry_run and applied:
+            self.store.save(config)
+            self.store.update_baseline(target_ref)
+
+        return applied, warnings
+</file>
+
+<file path="src/codesub/errors.py">
+"""Custom exceptions for codesub."""
+
+
+class CodesubError(Exception):
+    """Base exception for all codesub errors."""
+
+    pass
+
+
+class ConfigNotFoundError(CodesubError):
+    """Raised when .codesub/subscriptions.json doesn't exist."""
+
+    def __init__(self, path: str | None = None):
+        self.path = path
+        msg = "Config not initialized. Run 'codesub init' first."
+        if path:
+            msg = f"Config not found at {path}. Run 'codesub init' first."
+        super().__init__(msg)
+
+
+class ConfigExistsError(CodesubError):
+    """Raised when trying to init but config already exists."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Config already exists at {path}. Use --force to overwrite.")
+
+
+class InvalidSchemaVersionError(CodesubError):
+    """Raised when config has an unsupported schema version."""
+
+    def __init__(self, found: int, supported: int):
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"Unsupported schema version {found}. This tool supports version {supported}."
+        )
+
+
+class SubscriptionNotFoundError(CodesubError):
+    """Raised when a subscription ID doesn't exist."""
+
+    def __init__(self, sub_id: str):
+        self.sub_id = sub_id
+        super().__init__(f"Subscription not found: {sub_id}")
+
+
+class InvalidLocationError(CodesubError):
+    """Raised when a location spec is invalid."""
+
+    def __init__(self, location: str, reason: str | None = None):
+        self.location = location
+        msg = f"Invalid location: {location}"
+        if reason:
+            msg = f"{msg} ({reason})"
+        super().__init__(msg)
+
+
+class FileNotFoundAtRefError(CodesubError):
+    """Raised when a file doesn't exist at the specified git ref."""
+
+    def __init__(self, path: str, ref: str):
+        self.path = path
+        self.ref = ref
+        super().__init__(f"File '{path}' not found at ref '{ref}'")
+
+
+class GitError(CodesubError):
+    """Raised when a git operation fails."""
+
+    def __init__(self, command: str, stderr: str):
+        self.command = command
+        self.stderr = stderr
+        super().__init__(f"Git command failed: {command}\n{stderr}")
+
+
+class NotAGitRepoError(CodesubError):
+    """Raised when not inside a git repository."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Not a git repository: {path}")
+
+
+class InvalidLineRangeError(CodesubError):
+    """Raised when line range is invalid."""
+
+    def __init__(self, start: int, end: int, reason: str):
+        self.start = start
+        self.end = end
+        super().__init__(f"Invalid line range {start}-{end}: {reason}")
+
+
+class ProjectNotFoundError(CodesubError):
+    """Raised when a project ID doesn't exist."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        super().__init__(f"Project not found: {project_id}")
+
+
+class InvalidProjectPathError(CodesubError):
+    """Raised when a project path is invalid."""
+
+    def __init__(self, path: str, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"Invalid project path '{path}': {reason}")
+
+
+class ScanNotFoundError(CodesubError):
+    """Raised when a scan history entry doesn't exist."""
+
+    def __init__(self, scan_id: str):
+        self.scan_id = scan_id
+        super().__init__(f"Scan not found: {scan_id}")
+
+
+class UnsupportedLanguageError(CodesubError):
+    """Raised when a language is not supported for semantic subscriptions.
+
+    Attributes:
+        language: The unsupported language identifier.
+        supported: List of currently supported languages.
+        hint: Optional hint for the user.
+    """
+
+    def __init__(
+        self, language: str, supported: list[str], hint: str | None = None
+    ) -> None:
+        self.language = language
+        self.supported = supported
+        msg = f"Unsupported language '{language}'. Supported: {', '.join(supported) or '<none>'}."
+        if hint:
+            msg = f"{msg} {hint}"
+        super().__init__(msg)
+</file>
+
+<file path="src/codesub/utils.py">
+"""Utility functions for codesub."""
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+from .errors import InvalidLocationError, InvalidLineRangeError
+
+
+@dataclass(frozen=True)
+class LineTarget:
+    """Line-based subscription target."""
+
+    path: str
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
+class SemanticTargetSpec:
+    """Semantic subscription target specification."""
+
+    path: str
+    qualname: str
+    kind: str | None = None  # Optional kind for disambiguation
+
+
+def parse_target_spec(spec: str) -> LineTarget | SemanticTargetSpec:
+    """
+    Parse target specification.
+
+    Formats:
+    - "path/to/file.py:42-50" -> LineTarget
+    - "path/to/file.py::QualName" -> SemanticTargetSpec
+    - "path/to/file.py::kind:QualName" -> SemanticTargetSpec with kind
+
+    Raises:
+        InvalidLocationError: If the location format is invalid.
+    """
+    if "::" in spec:
+        path, rest = spec.split("::", 1)
+        if not path or not rest:
+            raise InvalidLocationError(spec, "expected 'path.py::QualName'")
+
+        # Normalize path
+        path = Path(path).as_posix()
+
+        # Check for kind prefix: "field:User.role"
+        # Valid kinds are: variable, field, method, class, interface, enum
+        # Note: "const" is a role, not a kind - constants are kind="variable" with role="const"
+        kind = None
+        qualname = rest
+        if ":" in rest and not rest.startswith(":"):
+            maybe_kind, maybe_qualname = rest.split(":", 1)
+            if maybe_kind in ("variable", "field", "method", "class", "interface", "enum"):
+                kind = maybe_kind
+                qualname = maybe_qualname
+
+        return SemanticTargetSpec(path=path, qualname=qualname, kind=kind)
+
+    # Fall back to line-based parsing
+    path, start, end = parse_location(spec)
+    return LineTarget(path=path, start_line=start, end_line=end)
+
+
+def parse_location(location: str) -> tuple[str, int, int]:
+    """
+    Parse a location spec into (path, start_line, end_line).
+
+    Formats:
+    - path/to/file:42 (single line)
+    - path/to/file:42-45 (range)
+
+    Returns:
+        Tuple of (path, start_line, end_line), all 1-based inclusive.
+
+    Raises:
+        InvalidLocationError: If the location format is invalid.
+        InvalidLineRangeError: If the line range is invalid.
+    """
+    # Match path:line or path:start-end
+    match = re.match(r"^(.+):(\d+)(?:-(\d+))?$", location)
+    if not match:
+        raise InvalidLocationError(
+            location, "expected format 'path:line' or 'path:start-end'"
+        )
+
+    path = match.group(1)
+    start = int(match.group(2))
+    end = int(match.group(3)) if match.group(3) else start
+
+    if start < 1:
+        raise InvalidLineRangeError(start, end, "start line must be >= 1")
+    if end < start:
+        raise InvalidLineRangeError(start, end, "end line must be >= start line")
+
+    # Normalize path to POSIX style
+    path = Path(path).as_posix()
+
+    return path, start, end
+
+
+def normalize_path(path: str) -> str:
+    """Normalize a path to POSIX style (forward slashes)."""
+    return Path(path).as_posix()
+
+
+def extract_anchors(
+    lines: list[str], start_line: int, end_line: int, context: int = 2
+) -> tuple[list[str], list[str], list[str]]:
+    """
+    Extract anchor lines from file content.
+
+    Args:
+        lines: All lines of the file (0-indexed list).
+        start_line: 1-based inclusive start line.
+        end_line: 1-based inclusive end line.
+        context: Number of context lines before/after.
+
+    Returns:
+        Tuple of (context_before, watched_lines, context_after).
+    """
+    # Convert to 0-based indices
+    start_idx = start_line - 1
+    end_idx = end_line  # exclusive for slicing
+
+    # Extract watched lines
+    watched = lines[start_idx:end_idx]
+
+    # Extract context before
+    ctx_before_start = max(0, start_idx - context)
+    ctx_before = lines[ctx_before_start:start_idx]
+
+    # Extract context after
+    ctx_after_end = min(len(lines), end_idx + context)
+    ctx_after = lines[end_idx:ctx_after_end]
+
+    return ctx_before, watched, ctx_after
+
+
+def format_subscription(sub: "Subscription", verbose: bool = False) -> str:
+    """Format a subscription for display."""
+    # Import here to avoid circular import
+    from .models import Subscription
+
+    status = "active" if sub.active else "inactive"
+    label_str = f" [{sub.label}]" if sub.label else ""
+    location = f"{sub.path}:{sub.start_line}"
+    if sub.end_line != sub.start_line:
+        location = f"{sub.path}:{sub.start_line}-{sub.end_line}"
+
+    result = f"{sub.id[:8]}  {location}{label_str} ({status})"
+
+    if verbose:
+        if sub.description:
+            result += f"\n         Description: {sub.description}"
+        if sub.anchors:
+            result += "\n         Lines:"
+            for line in sub.anchors.lines:
+                # Truncate long lines
+                display_line = line[:60] + "..." if len(line) > 60 else line
+                result += f"\n           | {display_line}"
+
+    return result
+
+
+def truncate_id(sub_id: str) -> str:
+    """Truncate a subscription ID for display."""
+    return sub_id[:8]
+</file>
+
+<file path="src/codesub/models.py">
+"""Data models for codesub."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+import uuid
+
+
+def _utc_now() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _generate_id() -> str:
+    """Generate a new subscription ID."""
+    return str(uuid.uuid4())
+
+
+@dataclass
+class SemanticTarget:
+    """Semantic identifier for a code construct."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save"
+    role: str | None = None  # "const" for constants, else None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "language": self.language,
+            "kind": self.kind,
+            "qualname": self.qualname,
+            "role": self.role,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+            "fingerprint_version": self.fingerprint_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+        return cls(
+            language=data["language"],
+            kind=data["kind"],
+            qualname=data["qualname"],
+            role=data.get("role"),
+            interface_hash=data.get("interface_hash", ""),
+            body_hash=data.get("body_hash", ""),
+            fingerprint_version=data.get("fingerprint_version", 1),
+        )
+
+
+@dataclass
+class Anchor:
+    """Context lines around a subscription for display and future fuzzy matching."""
+
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_before": self.context_before,
+            "lines": self.lines,
+            "context_after": self.context_after,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Anchor":
+        return cls(
+            context_before=data.get("context_before", []),
+            lines=data.get("lines", []),
+            context_after=data.get("context_after", []),
+        )
+
+
+@dataclass
+class Subscription:
+    """A subscription to a file line range."""
+
+    id: str
+    path: str  # repo-relative, POSIX-style
+    start_line: int  # 1-based inclusive
+    end_line: int  # 1-based inclusive
+    label: str | None = None
+    description: str | None = None
+    anchors: Anchor | None = None
+    semantic: SemanticTarget | None = None
+    active: bool = True
+    trigger_on_duplicate: bool = False  # Trigger if construct found in multiple files
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "id": self.id,
+            "path": self.path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "active": self.active,
+            "trigger_on_duplicate": self.trigger_on_duplicate,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+        if self.label is not None:
+            result["label"] = self.label
+        if self.description is not None:
+            result["description"] = self.description
+        if self.anchors is not None:
+            result["anchors"] = self.anchors.to_dict()
+        if self.semantic is not None:
+            result["semantic"] = self.semantic.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Subscription":
+        anchors = None
+        if "anchors" in data:
+            anchors = Anchor.from_dict(data["anchors"])
+        semantic = None
+        if "semantic" in data:
+            semantic = SemanticTarget.from_dict(data["semantic"])
+        return cls(
+            id=data["id"],
+            path=data["path"],
+            start_line=data["start_line"],
+            end_line=data["end_line"],
+            label=data.get("label"),
+            description=data.get("description"),
+            anchors=anchors,
+            semantic=semantic,
+            active=data.get("active", True),
+            trigger_on_duplicate=data.get("trigger_on_duplicate", False),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        path: str,
+        start_line: int,
+        end_line: int,
+        label: str | None = None,
+        description: str | None = None,
+        anchors: Anchor | None = None,
+        semantic: "SemanticTarget | None" = None,
+        trigger_on_duplicate: bool = False,
+    ) -> "Subscription":
+        """Create a new subscription with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            label=label,
+            description=description,
+            anchors=anchors,
+            semantic=semantic,
+            active=True,
+            trigger_on_duplicate=trigger_on_duplicate,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class RepoConfig:
+    """Repository-level configuration."""
+
+    baseline_ref: str
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "baseline_ref": self.baseline_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RepoConfig":
+        return cls(
+            baseline_ref=data["baseline_ref"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+
+@dataclass
+class Config:
+    """Full configuration containing repo config and subscriptions."""
+
+    schema_version: int
+    repo: RepoConfig
+    subscriptions: list[Subscription]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repo": self.repo.to_dict(),
+            "subscriptions": [s.to_dict() for s in self.subscriptions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Config":
+        return cls(
+            schema_version=data["schema_version"],
+            repo=RepoConfig.from_dict(data["repo"]),
+            subscriptions=[Subscription.from_dict(s) for s in data.get("subscriptions", [])],
+        )
+
+    @classmethod
+    def create(cls, baseline_ref: str) -> "Config":
+        """Create a new config with the given baseline ref."""
+        return cls(
+            schema_version=1,
+            repo=RepoConfig(baseline_ref=baseline_ref),
+            subscriptions=[],
+        )
+
+
+# Models for diff parsing
+
+
+@dataclass
+class Hunk:
+    """A single hunk from a unified diff."""
+
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+
+
+@dataclass
+class FileDiff:
+    """Diff information for a single file."""
+
+    old_path: str
+    new_path: str
+    hunks: list[Hunk]
+    is_rename: bool = False
+    is_new_file: bool = False
+    is_deleted_file: bool = False
+
+
+# Models for detection results
+
+
+@dataclass
+class Trigger:
+    """A subscription that was triggered by changes."""
+
+    subscription_id: str
+    subscription: Subscription
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range",
+    #                           "semantic_target_missing", "duplicate_found",
+    #                           "interface_changed", "body_changed"]
+    matching_hunks: list[Hunk]
+    change_type: str | None = None  # "STRUCTURAL"|"CONTENT"|"MISSING"|"AMBIGUOUS"|"PARSE_ERROR"
+    details: dict[str, Any] | None = None
+
+
+@dataclass
+class Proposal:
+    """A proposed update to a subscription (rename or line shift)."""
+
+    subscription_id: str
+    subscription: Subscription
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]  # ["rename", "line_shift", "semantic_location", "moved_cross_file"]
+    confidence: str = "high"  # "high"|"medium"|"low" based on match tier
+    shift: int | None = None
+    new_qualname: str | None = None  # For semantic subscriptions when construct renamed
+    new_kind: str | None = None  # For semantic subscriptions if kind changed
+
+
+@dataclass
+class ScanResult:
+    """Result of scanning for changes."""
+
+    base_ref: str
+    target_ref: str
+    triggers: list[Trigger]
+    proposals: list[Proposal]
+    unchanged: list[Subscription]  # Subscriptions with no changes or shifts
+
+
+# Models for multi-project management
+
+
+@dataclass
+class Project:
+    """A registered project (git repository with codesub initialized)."""
+
+    id: str
+    name: str  # Display name (defaults to repo directory name)
+    path: str  # Absolute path to the repository root
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Project":
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            path=data["path"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(cls, name: str, path: str) -> "Project":
+        """Create a new project with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            name=name,
+            path=path,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class ScanHistoryEntry:
+    """A persisted scan result."""
+
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+    scan_result: dict[str, Any]  # Full ScanResult as dict
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "base_ref": self.base_ref,
+            "target_ref": self.target_ref,
+            "trigger_count": self.trigger_count,
+            "proposal_count": self.proposal_count,
+            "unchanged_count": self.unchanged_count,
+            "created_at": self.created_at,
+            "scan_result": self.scan_result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScanHistoryEntry":
+        return cls(
+            id=data["id"],
+            project_id=data["project_id"],
+            base_ref=data["base_ref"],
+            target_ref=data["target_ref"],
+            trigger_count=data["trigger_count"],
+            proposal_count=data["proposal_count"],
+            unchanged_count=data["unchanged_count"],
+            created_at=data["created_at"],
+            scan_result=data["scan_result"],
+        )
+</file>
+
+<file path="src/codesub/cli.py">
+"""Command-line interface for codesub."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import __version__
+from .config_store import ConfigStore
+from .errors import CodesubError
+from .git_repo import GitRepo
+from .models import Anchor, SemanticTarget, Subscription
+from .utils import (
+    LineTarget,
+    SemanticTargetSpec,
+    extract_anchors,
+    format_subscription,
+    parse_target_spec,
+)
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Initialize codesub in the current repository."""
+    try:
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        # Resolve baseline ref
+        baseline = args.baseline or "HEAD"
+        baseline_hash = repo.resolve_ref(baseline)
+
+        config = store.init(baseline_hash, force=args.force)
+
+        print(f"Initialized codesub at {store.config_dir}")
+        print(f"Baseline: {baseline_hash[:12]} ({baseline})")
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Add a new subscription."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+        baseline = config.repo.baseline_ref
+
+        # Parse target specification
+        target = parse_target_spec(args.location)
+
+        if isinstance(target, SemanticTargetSpec):
+            # Semantic subscription
+            return _add_semantic_subscription(
+                store, repo, baseline, target, args
+            )
+        else:
+            # Line-based subscription
+            return _add_line_subscription(
+                store, repo, baseline, target, args
+            )
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _add_line_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: LineTarget,
+    args: argparse.Namespace,
+) -> int:
+    """Add a line-based subscription."""
+    lines = repo.show_file(baseline, target.path)
+
+    # Validate line range
+    if target.end_line > len(lines):
+        print(
+            f"Error: Line range {target.start_line}-{target.end_line} exceeds "
+            f"file length ({len(lines)} lines)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, target.start_line, target.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=target.path,
+        start_line=target.start_line,
+        end_line=target.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+
+    location = (
+        f"{target.path}:{target.start_line}"
+        if target.start_line == target.end_line
+        else f"{target.path}:{target.start_line}-{target.end_line}"
+    )
+    print(f"Added subscription: {sub.id[:8]}")
+    print(f"  Location: {location}")
+    if args.label:
+        print(f"  Label: {args.label}")
+    print(f"  Watching {target.end_line - target.start_line + 1} line(s)")
+
+    return 0
+
+
+def _add_semantic_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: SemanticTargetSpec,
+    args: argparse.Namespace,
+) -> int:
+    """Add a semantic subscription."""
+    from .errors import UnsupportedLanguageError
+    from .semantic import get_indexer_for_path
+
+    try:
+        language, indexer = get_indexer_for_path(target.path)
+    except UnsupportedLanguageError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    lines = repo.show_file(baseline, target.path)
+    source = "\n".join(lines)
+
+    construct = indexer.find_construct(
+        source, target.path, target.qualname, target.kind
+    )
+    if construct is None:
+        print(f"Error: Construct '{target.qualname}' not found in {target.path}")
+        print("Use 'codesub symbols' to discover valid targets.")
+        return 1
+
+    # Extract anchors from construct lines
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, construct.start_line, construct.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create semantic target
+    semantic = SemanticTarget(
+        language=language,
+        kind=construct.kind,
+        qualname=construct.qualname,
+        role=construct.role,
+        interface_hash=construct.interface_hash,
+        body_hash=construct.body_hash,
+    )
+
+    sub = Subscription.create(
+        path=target.path,
+        start_line=construct.start_line,
+        end_line=construct.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+        semantic=semantic,
+        trigger_on_duplicate=getattr(args, 'trigger_on_duplicate', False),
+    )
+
+    store.add_subscription(sub)
+
+    print(f"Added semantic subscription: {sub.id[:8]}")
+    print(f"  Target: {construct.kind} {construct.qualname}")
+    print(f"  Location: {target.path}:{construct.start_line}-{construct.end_line}")
+    if args.label:
+        print(f"  Label: {args.label}")
+
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all subscriptions."""
+    try:
+        store, _ = get_store_and_repo()
+        config = store.load()
+
+        subs = config.subscriptions
+        if not args.all:
+            subs = [s for s in subs if s.active]
+
+        if not subs:
+            print("No subscriptions found.")
+            return 0
+
+        if args.json:
+            data = [s.to_dict() for s in subs]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Subscriptions ({len(subs)}):")
+            print(f"Baseline: {config.repo.baseline_ref[:12]}")
+            print()
+            for sub in subs:
+                print(format_subscription(sub, verbose=args.verbose))
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    """Remove a subscription."""
+    try:
+        store, _ = get_store_and_repo()
+
+        sub = store.remove_subscription(args.subscription_id, hard=args.hard)
+
+        action = "Removed" if args.hard else "Deactivated"
+        print(f"{action} subscription: {sub.id[:8]}")
+        if sub.label:
+            print(f"  Label: {sub.label}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Scan for changes and report triggered subscriptions."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        # Import detector here to avoid circular imports during module load
+        from .detector import Detector
+
+        # Resolve refs
+        base_ref = args.base or config.repo.baseline_ref
+        target_ref = repo.resolve_ref(args.target or "HEAD")
+        base_ref = repo.resolve_ref(base_ref)
+
+        if base_ref == target_ref:
+            print("Base and target refs are the same. No changes to scan.")
+            return 0
+
+        # Run detection
+        detector = Detector(repo)
+        result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+        # Output results
+        if args.json:
+            from .update_doc import result_to_dict
+            data = result_to_dict(result)
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Scan: {base_ref[:12]} -> {target_ref[:12]}")
+            print()
+
+            if result.triggers:
+                print(f"TRIGGERED ({len(result.triggers)}):")
+                for trigger in result.triggers:
+                    sub = trigger.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    location = f"{trigger.path}:{trigger.start_line}-{trigger.end_line}"
+                    reasons = ", ".join(trigger.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    Location: {location}")
+                    print(f"    Reason: {reasons}")
+                print()
+
+            if result.proposals:
+                print(f"PROPOSED UPDATES ({len(result.proposals)}):")
+                for prop in result.proposals:
+                    sub = prop.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    old_loc = f"{prop.old_path}:{prop.old_start}-{prop.old_end}"
+                    new_loc = f"{prop.new_path}:{prop.new_start}-{prop.new_end}"
+                    reasons = ", ".join(prop.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    {old_loc} -> {new_loc}")
+                    print(f"    Reason: {reasons}")
+                    if prop.shift:
+                        print(f"    Shift: {prop.shift:+d}")
+                print()
+
+            if result.unchanged:
+                print(f"UNCHANGED ({len(result.unchanged)}):")
+                for sub in result.unchanged:
+                    label = f" [{sub.label}]" if sub.label else ""
+                    print(f"  {sub.id[:8]}{label}")
+                print()
+
+        # Write update documents if requested
+        if args.write_updates:
+            from .update_doc import write_update_doc
+            write_update_doc(result, args.write_updates)
+            print(f"Wrote update document: {args.write_updates}")
+
+        if args.write_md:
+            from .update_doc import write_markdown_doc
+            write_markdown_doc(result, args.write_md)
+            print(f"Wrote markdown summary: {args.write_md}")
+
+        # Exit code
+        if args.fail_on_trigger and result.triggers:
+            return 2
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_apply_updates(args: argparse.Namespace) -> int:
+    """Apply update proposals from an update document."""
+    try:
+        store, repo = get_store_and_repo()
+
+        from .updater import Updater
+
+        updater = Updater(store, repo)
+
+        # Load update document
+        with open(args.update_doc, "r", encoding="utf-8") as f:
+            update_data = json.load(f)
+
+        if args.dry_run:
+            print("Dry run - no changes will be made")
+            print()
+
+        applied, warnings = updater.apply(update_data, dry_run=args.dry_run)
+
+        if warnings:
+            print("Warnings:")
+            for warning in warnings:
+                print(f"  {warning}")
+            print()
+
+        if applied:
+            print(f"Applied {len(applied)} update(s):")
+            for sub_id in applied:
+                print(f"  {sub_id[:8]}")
+        else:
+            print("No updates applied.")
+
+        if not args.dry_run and applied:
+            target_ref = update_data.get("target_ref", "")
+            print(f"\nBaseline updated to: {target_ref[:12]}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"Error: Update document not found: {args.update_doc}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in update document: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_list(args: argparse.Namespace) -> int:
+    """List registered projects."""
+    try:
+        store = ProjectStore()
+        projects = store.list_projects()
+
+        if not projects:
+            print("No projects registered.")
+            print("Add a project with: codesub projects add <path>")
+            return 0
+
+        if args.json:
+            data = [p.to_dict() for p in projects]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Projects ({len(projects)}):")
+            print()
+            for p in projects:
+                print(f"  {p.id[:8]}  {p.name}")
+                print(f"           {p.path}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_add(args: argparse.Namespace) -> int:
+    """Add a project."""
+    try:
+        store = ProjectStore()
+        project = store.add_project(path=args.path, name=args.name)
+
+        print(f"Added project: {project.id[:8]}")
+        print(f"  Name: {project.name}")
+        print(f"  Path: {project.path}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_remove(args: argparse.Namespace) -> int:
+    """Remove a project."""
+    try:
+        store = ProjectStore()
+        project = store.remove_project(args.project_id)
+
+        print(f"Removed project: {project.id[:8]} ({project.name})")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan_history_clear(args: argparse.Namespace) -> int:
+    """Clear scan history."""
+    try:
+        history = ScanHistory()
+
+        if args.project:
+            count = history.clear_project_history(args.project)
+            print(f"Cleared {count} scan(s) for project {args.project[:8]}")
+        else:
+            count = history.clear_all_history()
+            print(f"Cleared {count} scan(s) from all projects")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_symbols(args: argparse.Namespace) -> int:
+    """List discoverable code constructs in a file."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        ref = args.ref or config.repo.baseline_ref
+        lines = repo.show_file(ref, args.path)
+        source = "\n".join(lines)
+
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer_for_path
+
+        try:
+            _, indexer = get_indexer_for_path(args.path)
+        except UnsupportedLanguageError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+        constructs = indexer.index_file(source, args.path)
+
+        # Filter by kind if specified
+        if args.kind:
+            constructs = [c for c in constructs if c.kind == args.kind]
+
+        # Filter by grep pattern if specified
+        if args.grep:
+            constructs = [c for c in constructs if args.grep in c.qualname]
+
+        if args.json:
+            data = [
+                {
+                    "path": c.path,
+                    "kind": c.kind,
+                    "qualname": c.qualname,
+                    "start_line": c.start_line,
+                    "end_line": c.end_line,
+                    "role": c.role,
+                }
+                for c in constructs
+            ]
+            print(json.dumps(data, indent=2))
+        else:
+            if not constructs:
+                print(f"No constructs found in {args.path}")
+                return 0
+
+            print(f"Constructs in {args.path} ({len(constructs)}):")
+            print()
+            for c in constructs:
+                fqn = f"{c.path}::{c.qualname}"
+                role_str = f" ({c.role})" if c.role else ""
+                lines_str = (
+                    f"{c.start_line}"
+                    if c.start_line == c.end_line
+                    else f"{c.start_line}-{c.end_line}"
+                )
+                print(f"  {c.kind:<10} {c.qualname}{role_str}")
+                print(f"             Lines: {lines_str}")
+                print(f"             FQN:   {fqn}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the API server."""
+    try:
+        import uvicorn
+
+        # Verify we're in a git repo
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        if not store.exists():
+            print("Warning: codesub not initialized. Run 'codesub init' first.", file=sys.stderr)
+            print("Starting server anyway...", file=sys.stderr)
+
+        print("Starting codesub API server...")
+        print(f"Repository: {repo.root}")
+        print(f"API docs: http://{args.host}:{args.port}/docs")
+        print()
+
+        # When reload is enabled, uvicorn requires the app as an import string
+        app_target = "codesub.api:app" if args.reload else None
+        if app_target is None:
+            from .api import app
+            app_target = app
+
+        uvicorn.run(
+            app_target,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+            workers=1,  # Single worker to avoid concurrent write issues
+        )
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="codesub",
+        description="Subscribe to file line ranges and detect changes via git diff.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # init
+    init_parser = subparsers.add_parser("init", help="Initialize codesub in the repository")
+    init_parser.add_argument(
+        "--baseline", "-b", help="Baseline ref (default: HEAD)"
+    )
+    init_parser.add_argument(
+        "--force", "-f", action="store_true", help="Overwrite existing config"
+    )
+
+    # add
+    add_parser = subparsers.add_parser("add", help="Add a new subscription")
+    add_parser.add_argument(
+        "location",
+        help="Location to subscribe to. Line-based: 'path:line' or 'path:start-end'. "
+        "Semantic: 'path::QualName' or 'path::kind:QualName'",
+    )
+    add_parser.add_argument("--label", "-l", help="Label for the subscription")
+    add_parser.add_argument("--desc", "-d", help="Description")
+    add_parser.add_argument(
+        "--context", "-c", type=int, default=2,
+        help="Number of context lines for anchors (default: 2)"
+    )
+    add_parser.add_argument(
+        "--trigger-on-duplicate",
+        action="store_true",
+        help="Trigger alert if construct is found in multiple files (default: no trigger)"
+    )
+
+    # list
+    list_parser = subparsers.add_parser("list", help="List subscriptions")
+    list_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    list_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show detailed info including anchors"
+    )
+    list_parser.add_argument(
+        "--all", "-a", action="store_true", help="Include inactive subscriptions"
+    )
+
+    # remove
+    remove_parser = subparsers.add_parser("remove", help="Remove a subscription")
+    remove_parser.add_argument("subscription_id", help="Subscription ID (or prefix)")
+    remove_parser.add_argument(
+        "--hard", action="store_true", help="Delete entirely (default: deactivate)"
+    )
+
+    # symbols
+    symbols_parser = subparsers.add_parser(
+        "symbols", help="List discoverable code constructs in a file"
+    )
+    symbols_parser.add_argument("path", help="File path to analyze")
+    symbols_parser.add_argument("--ref", help="Git ref (default: baseline)")
+    symbols_parser.add_argument(
+        "--kind",
+        choices=["variable", "field", "method", "class", "interface", "enum"],
+        help="Filter by construct kind",
+    )
+    symbols_parser.add_argument("--grep", help="Filter by name pattern")
+    symbols_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # scan
+    scan_parser = subparsers.add_parser(
+        "scan", help="Scan for changes and report triggered subscriptions"
+    )
+    scan_parser.add_argument(
+        "--base", "-b", help="Base ref (default: config baseline)"
+    )
+    scan_parser.add_argument(
+        "--target", "-t", help="Target ref (default: HEAD)"
+    )
+    scan_parser.add_argument(
+        "--write-updates", "-w", help="Write JSON update document to path"
+    )
+    scan_parser.add_argument(
+        "--write-md", "-m", help="Write markdown summary to path"
+    )
+    scan_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    scan_parser.add_argument(
+        "--fail-on-trigger", action="store_true",
+        help="Exit with code 2 if any subscriptions are triggered"
+    )
+
+    # apply-updates
+    apply_parser = subparsers.add_parser(
+        "apply-updates", help="Apply update proposals from an update document"
+    )
+    apply_parser.add_argument("update_doc", help="Path to update document JSON")
+    apply_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done without applying"
+    )
+
+    # serve
+    serve_parser = subparsers.add_parser("serve", help="Start the API server")
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", "-p", type=int, default=8000, help="Port to bind to (default: 8000)"
+    )
+    serve_parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload for development"
+    )
+
+    # projects (subcommand group)
+    projects_parser = subparsers.add_parser("projects", help="Manage registered projects")
+    projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
+
+    # projects list
+    projects_list_parser = projects_subparsers.add_parser("list", help="List registered projects")
+    projects_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # projects add
+    projects_add_parser = projects_subparsers.add_parser("add", help="Add a project")
+    projects_add_parser.add_argument("path", help="Path to git repository")
+    projects_add_parser.add_argument("--name", "-n", help="Display name (defaults to dir name)")
+
+    # projects remove
+    projects_remove_parser = projects_subparsers.add_parser("remove", help="Remove a project")
+    projects_remove_parser.add_argument("project_id", help="Project ID")
+
+    # scan-history
+    scan_history_parser = subparsers.add_parser("scan-history", help="Manage scan history")
+    scan_history_subparsers = scan_history_parser.add_subparsers(dest="scan_history_command")
+
+    # scan-history clear
+    scan_history_clear_parser = scan_history_subparsers.add_parser("clear", help="Clear scan history")
+    scan_history_clear_parser.add_argument(
+        "--project", "-p", help="Clear only for specific project ID"
+    )
+
+    return parser
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    # Handle projects subcommands
+    if args.command == "projects":
+        if not hasattr(args, "projects_command") or not args.projects_command:
+            parser.parse_args(["projects", "--help"])
+            return 0
+        if args.projects_command == "list":
+            return cmd_projects_list(args)
+        elif args.projects_command == "add":
+            return cmd_projects_add(args)
+        elif args.projects_command == "remove":
+            return cmd_projects_remove(args)
+
+    # Handle scan-history subcommands
+    if args.command == "scan-history":
+        if not hasattr(args, "scan_history_command") or not args.scan_history_command:
+            parser.parse_args(["scan-history", "--help"])
+            return 0
+        if args.scan_history_command == "clear":
+            return cmd_scan_history_clear(args)
+
+    commands = {
+        "init": cmd_init,
+        "add": cmd_add,
+        "list": cmd_list,
+        "remove": cmd_remove,
+        "symbols": cmd_symbols,
+        "scan": cmd_scan,
+        "apply-updates": cmd_apply_updates,
+        "serve": cmd_serve,
+    }
+
+    cmd_func = commands.get(args.command)
+    if cmd_func:
+        return cmd_func(args)
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+</file>
+
+<file path="src/codesub/detector.py">
+"""Change detection for codesub."""
+
+from typing import TYPE_CHECKING
+
+from .diff_parser import DiffParser, ranges_overlap
+from .git_repo import GitRepo
+from .models import FileDiff, Hunk, Proposal, ScanResult, SemanticTarget, Subscription, Trigger
+
+if TYPE_CHECKING:
+    from .semantic import Construct
+
+
+class Detector:
+    """Detects changes affecting subscriptions."""
+
+    def __init__(self, repo: GitRepo):
+        self.repo = repo
+        self.parser = DiffParser()
+
+    def scan(
+        self,
+        subscriptions: list[Subscription],
+        base_ref: str,
+        target_ref: str | None = None,
+    ) -> ScanResult:
+        """
+        Scan for changes between two refs, or between a ref and working directory.
+
+        Args:
+            subscriptions: List of subscriptions to check.
+            base_ref: Base git ref.
+            target_ref: Target git ref, or None/empty for working directory.
+
+        Returns:
+            ScanResult with triggers, proposals, and unchanged subscriptions.
+        """
+        # Only process active subscriptions
+        active_subs = [s for s in subscriptions if s.active]
+
+        # Use "WORKING" to represent working directory
+        display_target = target_ref or "WORKING"
+
+        if not active_subs:
+            return ScanResult(
+                base_ref=base_ref,
+                target_ref=display_target,
+                triggers=[],
+                proposals=[],
+                unchanged=[],
+            )
+
+        # Get diffs
+        patch_text = self.repo.diff_patch(base_ref, target_ref)
+        name_status_text = self.repo.diff_name_status(base_ref, target_ref)
+
+        # Parse diffs
+        file_diffs = self.parser.parse_patch(patch_text)
+        rename_map, status_map = self.parser.parse_name_status(name_status_text)
+
+        # Build lookup by old path
+        diff_by_path: dict[str, FileDiff] = {}
+        for fd in file_diffs:
+            diff_by_path[fd.old_path] = fd
+
+        triggers: list[Trigger] = []
+        proposals: list[Proposal] = []
+        unchanged: list[Subscription] = []
+
+        # Cache for indexed constructs: (path, language) -> list[Construct]
+        # Avoids re-parsing the same file for multiple subscriptions
+        construct_cache: dict[tuple[str, str], list] = {}
+
+        for sub in active_subs:
+            # Check if semantic subscription
+            if sub.semantic is not None:
+                trigger, proposal = self._check_semantic(
+                    sub, base_ref, target_ref, rename_map, status_map,
+                    file_diffs, construct_cache
+                )
+                if trigger:
+                    triggers.append(trigger)
+                if proposal:
+                    proposals.append(proposal)
+                if not trigger and not proposal:
+                    unchanged.append(sub)
+                continue
+
+            # Line-based subscription
+            # Check if file was renamed
+            new_path = rename_map.get(sub.path, sub.path)
+            is_renamed = new_path != sub.path
+
+            # Check if file was deleted
+            file_status = status_map.get(sub.path, "")
+            is_deleted = file_status == "D"
+
+            # Get diff for this file
+            file_diff = diff_by_path.get(sub.path)
+
+            # Check for triggers
+            trigger = self._check_trigger(sub, file_diff, is_deleted)
+
+            if trigger:
+                triggers.append(trigger)
+            else:
+                # Check for proposals (shift or rename)
+                proposal = self._compute_proposal(
+                    sub, file_diff, is_renamed, new_path
+                )
+                if proposal:
+                    proposals.append(proposal)
+                else:
+                    unchanged.append(sub)
+
+        return ScanResult(
+            base_ref=base_ref,
+            target_ref=display_target,
+            triggers=triggers,
+            proposals=proposals,
+            unchanged=unchanged,
+        )
+
+    def _check_trigger(
+        self,
+        sub: Subscription,
+        file_diff: FileDiff | None,
+        is_deleted: bool,
+    ) -> Trigger | None:
+        """
+        Check if a subscription is triggered by changes.
+
+        Returns:
+            Trigger if triggered, None otherwise.
+        """
+        if is_deleted:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["file_deleted"],
+                matching_hunks=[],
+            )
+
+        if file_diff is None:
+            return None
+
+        if file_diff.is_deleted_file:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["file_deleted"],
+                matching_hunks=[],
+            )
+
+        matching_hunks: list[Hunk] = []
+        reasons: list[str] = []
+
+        for hunk in file_diff.hunks:
+            if hunk.old_count > 0:
+                # Modification or deletion: check for overlap
+                hunk_start = hunk.old_start
+                hunk_end = hunk.old_start + hunk.old_count - 1
+
+                if ranges_overlap(sub.start_line, sub.end_line, hunk_start, hunk_end):
+                    matching_hunks.append(hunk)
+                    if "overlap_hunk" not in reasons:
+                        reasons.append("overlap_hunk")
+            else:
+                # Pure insertion (old_count == 0)
+                # In git diff, old_start is the line AFTER which new content is inserted.
+                #
+                # Trigger semantics (conservative - trigger if insertion could affect
+                # the logical unit being watched):
+                # - Insert after line 5 when watching 5-10: triggers (between watched lines)
+                # - Insert after line 4 when watching 5-10: doesn't trigger (before range, will shift)
+                # - Insert after line 9 when watching 5-10: triggers (between watched lines)
+                # - Insert after line 10 when watching 5-10: doesn't trigger (after range)
+                #
+                # Condition: sub_start <= old_start < sub_end
+                # This triggers when insertion is between the first and last watched lines
+                # but NOT when insertion is immediately after the last line.
+                if sub.start_line <= hunk.old_start < sub.end_line:
+                    matching_hunks.append(hunk)
+                    if "insert_inside_range" not in reasons:
+                        reasons.append("insert_inside_range")
+
+        if reasons:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=reasons,
+                matching_hunks=matching_hunks,
+            )
+
+        return None
+
+    def _compute_proposal(
+        self,
+        sub: Subscription,
+        file_diff: FileDiff | None,
+        is_renamed: bool,
+        new_path: str,
+    ) -> Proposal | None:
+        """
+        Compute a proposal for updating a subscription (shift or rename).
+
+        Only called for non-triggered subscriptions.
+
+        Returns:
+            Proposal if updates needed, None otherwise.
+        """
+        shift = 0
+
+        if file_diff is not None and file_diff.hunks:
+            shift = self._calculate_shift(sub, file_diff.hunks)
+
+        # Create proposal if there's a shift or rename
+        if shift != 0 or is_renamed:
+            reasons = []
+            if is_renamed:
+                reasons.append("rename")
+            if shift != 0:
+                reasons.append("line_shift")
+
+            return Proposal(
+                subscription_id=sub.id,
+                subscription=sub,
+                old_path=sub.path,
+                old_start=sub.start_line,
+                old_end=sub.end_line,
+                new_path=new_path,
+                new_start=sub.start_line + shift,
+                new_end=sub.end_line + shift,
+                reasons=reasons,
+                confidence="high",
+                shift=shift if shift != 0 else None,
+            )
+
+        return None
+
+    def _calculate_shift(self, sub: Subscription, hunks: list[Hunk]) -> int:
+        """
+        Calculate line number shift for a subscription.
+
+        IMPORTANT: This should only be called for non-triggered subscriptions,
+        meaning no hunk overlaps with the subscription range.
+
+        Args:
+            sub: The subscription.
+            hunks: List of hunks from the file diff (will be sorted if needed).
+
+        Returns:
+            Net shift in line numbers.
+        """
+        # Defensive sort - ensure hunks are in ascending old_start order
+        sorted_hunks = sorted(hunks, key=lambda h: h.old_start)
+
+        shift = 0
+        sub_start = sub.start_line
+
+        for hunk in sorted_hunks:
+            delta = hunk.new_count - hunk.old_count
+
+            if hunk.old_count == 0:
+                # Pure insertion: affects lines > old_start
+                # old_start is the line AFTER which insertion happens
+                if hunk.old_start < sub_start:
+                    shift += delta
+            else:
+                # Modification/deletion: old_end = old_start + old_count - 1
+                old_end = hunk.old_start + hunk.old_count - 1
+
+                if old_end < sub_start:
+                    # Hunk is entirely before subscription
+                    shift += delta
+                elif hunk.old_start > sub.end_line:
+                    # Hunk is entirely after subscription, stop processing
+                    # (hunks are sorted)
+                    break
+                # else: hunk overlaps subscription, but we shouldn't reach here
+                # because overlapping hunks would have triggered the subscription
+
+        return shift
+
+    def _search_cross_file(
+        self,
+        semantic: SemanticTarget,
+        old_path: str,
+        new_path: str,
+        target_ref: str | None,
+        file_diffs: list[FileDiff],
+        status_map: dict[str, str],
+        construct_cache: dict[tuple[str, str], list],
+    ) -> tuple[list[tuple[str, "Construct"]], str]:
+        """Search for construct in other files from the diff.
+
+        Args:
+            semantic: The semantic target to search for.
+            old_path: Original subscription path to skip.
+            new_path: Renamed path to skip (may be same as old_path).
+            target_ref: Target ref for reading files.
+            file_diffs: List of file diffs to search.
+            status_map: Path to status mapping.
+            construct_cache: Cache of indexed constructs per file.
+
+        Returns:
+            Tuple of (matches, best_match_tier).
+            matches is list of (file_path, Construct) tuples.
+            best_match_tier is "exact" | "body" | "interface" | "none".
+        """
+        from .errors import UnsupportedLanguageError
+        from .semantic import detect_language, get_indexer
+
+        target_language = semantic.language
+        all_matches: list[tuple[str, "Construct"]] = []
+        best_tier = "none"
+        tier_priority = {"exact": 0, "body": 1, "interface": 2, "none": 3}
+        skip_paths = {old_path, new_path}
+
+        for fd in file_diffs:
+            candidate_path = fd.new_path
+
+            # Skip original file (both old and new paths)
+            if candidate_path in skip_paths or fd.old_path in skip_paths:
+                continue
+
+            # Skip deleted files
+            if fd.is_deleted_file or status_map.get(fd.old_path) == "D":
+                continue
+
+            # Check language compatibility
+            try:
+                candidate_language = detect_language(candidate_path)
+                if candidate_language != target_language:
+                    continue
+            except UnsupportedLanguageError:
+                continue
+
+            # Check cache first
+            cache_key = (candidate_path, target_language)
+            if cache_key in construct_cache:
+                constructs = construct_cache[cache_key]
+            else:
+                # Get file content
+                try:
+                    if target_ref:
+                        source = "\n".join(self.repo.show_file(target_ref, candidate_path))
+                    else:
+                        with open(self.repo.root / candidate_path, encoding="utf-8") as f:
+                            source = f.read()
+                except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
+                    continue
+
+                # Index the file and cache
+                indexer = get_indexer(target_language)
+                constructs = indexer.index_file(source, candidate_path)
+                construct_cache[cache_key] = constructs
+
+            # Find matches using candidates API
+            matches, tier = self._find_hash_candidates(semantic, constructs)
+            for match in matches:
+                all_matches.append((candidate_path, match))
+                if tier_priority[tier] < tier_priority[best_tier]:
+                    best_tier = tier
+
+        return all_matches, best_tier
+
+    def _check_semantic(
+        self,
+        sub: Subscription,
+        base_ref: str,
+        target_ref: str | None,
+        rename_map: dict[str, str],
+        status_map: dict[str, str],
+        file_diffs: list[FileDiff],
+        construct_cache: dict[tuple[str, str], list],
+    ) -> tuple[Trigger | None, Proposal | None]:
+        """Check semantic subscription for changes.
+
+        Uses a 3-stage detection strategy:
+        - Stage 1: Exact qualname match in same/renamed file
+        - Stage 2: Hash-based search in same/renamed file
+        - Stage 3: Cross-file hash search in other files from the diff
+        """
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer
+
+        assert sub.semantic is not None  # Type narrowing
+
+        try:
+            indexer = get_indexer(sub.semantic.language)
+        except UnsupportedLanguageError as e:
+            # Return AMBIGUOUS trigger for unsupported languages
+            return (
+                Trigger(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    path=sub.path,
+                    start_line=sub.start_line,
+                    end_line=sub.end_line,
+                    reasons=["unsupported_language"],
+                    matching_hunks=[],
+                    change_type="AMBIGUOUS",
+                    details={"error": str(e)},
+                ),
+                None,
+            )
+
+        old_path = sub.path
+        new_path = rename_map.get(old_path, old_path)
+
+        # Track why we might fail, for final error message
+        file_deleted = status_map.get(old_path) == "D"
+        file_read_failed = False
+        new_source: str | None = None
+
+        # Try to get new file content (may fail if deleted or unreadable)
+        if not file_deleted:
+            try:
+                if target_ref:
+                    new_source = "\n".join(self.repo.show_file(target_ref, new_path))
+                else:
+                    with open(self.repo.root / new_path, encoding="utf-8") as f:
+                        new_source = f.read()
+            except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
+                file_read_failed = True
+
+        # Stage 1 & 2: Only if we have new_source
+        if new_source is not None:
+            # Stage 1: Exact match by qualname
+            new_construct = indexer.find_construct(
+                new_source, new_path, sub.semantic.qualname, sub.semantic.kind
+            )
+
+            if new_construct:
+                # Found by exact qualname - check for changes
+                trigger = self._classify_semantic_change(sub, new_construct)
+                proposal = None
+
+                if old_path != new_path:
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["rename"],
+                        confidence="high",
+                    )
+                elif (
+                    new_construct.start_line != sub.start_line
+                    or new_construct.end_line != sub.end_line
+                ):
+                    proposal = Proposal(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        old_path=old_path,
+                        old_start=sub.start_line,
+                        old_end=sub.end_line,
+                        new_path=new_path,
+                        new_start=new_construct.start_line,
+                        new_end=new_construct.end_line,
+                        reasons=["line_shift"],
+                        confidence="high",
+                    )
+
+                return trigger, proposal
+
+            # Stage 2: Hash-based search in same file
+            new_constructs = indexer.index_file(new_source, new_path)
+            match = self._find_by_hash(sub.semantic, new_constructs)
+
+            if match:
+                trigger = self._classify_semantic_change(sub, match)
+                proposal = Proposal(
+                    subscription_id=sub.id,
+                    subscription=sub,
+                    old_path=old_path,
+                    old_start=sub.start_line,
+                    old_end=sub.end_line,
+                    new_path=new_path,
+                    new_start=match.start_line,
+                    new_end=match.end_line,
+                    reasons=["semantic_location"],
+                    confidence="high",
+                    new_qualname=match.qualname,
+                    new_kind=match.kind,
+                )
+                return trigger, proposal
+
+        # Stage 3: Cross-file search (always attempted, even if file deleted)
+        cross_matches, match_tier = self._search_cross_file(
+            sub.semantic, old_path, new_path, target_ref, file_diffs,
+            status_map, construct_cache
+        )
+
+        if len(cross_matches) == 1:
+            # Found in exactly one other file
+            found_path, found_construct = cross_matches[0]
+            trigger = self._classify_semantic_change(sub, found_construct)
+
+            # Set confidence based on match tier
+            confidence = "high" if match_tier == "exact" else "medium" if match_tier == "body" else "low"
+
+            proposal = Proposal(
+                subscription_id=sub.id,
+                subscription=sub,
+                old_path=old_path,
+                old_start=sub.start_line,
+                old_end=sub.end_line,
+                new_path=found_path,
+                new_start=found_construct.start_line,
+                new_end=found_construct.end_line,
+                reasons=["moved_cross_file"],
+                confidence=confidence,
+                new_qualname=found_construct.qualname if found_construct.qualname != sub.semantic.qualname else None,
+                new_kind=found_construct.kind if found_construct.kind != sub.semantic.kind else None,
+            )
+            return trigger, proposal
+
+        if len(cross_matches) > 1:
+            # Found in multiple files (duplicate/ambiguous)
+            if sub.trigger_on_duplicate:
+                locations = [f"{path}:{c.start_line}" for path, c in cross_matches]
+                return (
+                    Trigger(
+                        subscription_id=sub.id,
+                        subscription=sub,
+                        path=old_path,
+                        start_line=sub.start_line,
+                        end_line=sub.end_line,
+                        reasons=["duplicate_found"],
+                        matching_hunks=[],
+                        change_type="AMBIGUOUS",
+                        details={"locations": locations},
+                    ),
+                    None,
+                )
+            # Default: duplicates are ambiguous, treat as unchanged (no trigger, no proposal)
+            return (None, None)
+
+        # Not found anywhere - determine the appropriate missing reason
+        if file_deleted:
+            reason = "file_deleted"
+        elif file_read_failed:
+            reason = "file_not_found"
+        else:
+            reason = "semantic_target_missing"
+
+        return (
+            Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=old_path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=[reason],
+                matching_hunks=[],
+                change_type="MISSING",
+            ),
+            None,
+        )
+
+    def _classify_semantic_change(
+        self,
+        sub: Subscription,
+        new_construct: "Construct",
+    ) -> Trigger | None:
+        """Classify change type between subscription fingerprints and new construct.
+
+        Compares stored fingerprints in sub.semantic against new_construct.
+        """
+        if sub.semantic is None:
+            return None
+
+        # Check interface change (type/signature)
+        if sub.semantic.interface_hash != new_construct.interface_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["interface_changed"],
+                matching_hunks=[],
+                change_type="STRUCTURAL",
+            )
+
+        # Check body change (value/implementation)
+        if sub.semantic.body_hash != new_construct.body_hash:
+            return Trigger(
+                subscription_id=sub.id,
+                subscription=sub,
+                path=sub.path,
+                start_line=sub.start_line,
+                end_line=sub.end_line,
+                reasons=["body_changed"],
+                matching_hunks=[],
+                change_type="CONTENT",
+            )
+
+        # No meaningful change (cosmetic only)
+        return None
+
+    def _find_by_hash(
+        self,
+        semantic: SemanticTarget,
+        constructs: "list[Construct]",
+    ) -> "Construct | None":
+        """Find construct by hash matching."""
+        # Try exact match (both hashes)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash
+            and c.body_hash == semantic.body_hash
+            and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try body-only match (renamed + signature changed)
+        matches = [
+            c
+            for c in constructs
+            if c.body_hash == semantic.body_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        # Try interface-only match (renamed + body changed)
+        matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash and c.kind == semantic.kind
+        ]
+        if len(matches) == 1:
+            return matches[0]
+
+        return None
+
+    def _find_hash_candidates(
+        self,
+        semantic: SemanticTarget,
+        constructs: "list[Construct]",
+    ) -> tuple[list["Construct"], str]:
+        """Find all constructs matching by hash, with match tier.
+
+        Unlike _find_by_hash which returns a single result or None,
+        this returns ALL matching constructs, enabling detection of
+        ambiguous matches (duplicates).
+
+        Args:
+            semantic: The semantic target with fingerprints.
+            constructs: List of constructs to search.
+
+        Returns:
+            Tuple of (matching_constructs, match_tier).
+            match_tier is "exact" | "body" | "interface" | "none".
+        """
+        # Try exact match (both hashes)
+        exact_matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash
+            and c.body_hash == semantic.body_hash
+            and c.kind == semantic.kind
+        ]
+        if exact_matches:
+            return exact_matches, "exact"
+
+        # Try body-only match (renamed + signature changed)
+        body_matches = [
+            c
+            for c in constructs
+            if c.body_hash == semantic.body_hash and c.kind == semantic.kind
+        ]
+        if body_matches:
+            return body_matches, "body"
+
+        # Try interface-only match (renamed + body changed)
+        interface_matches = [
+            c
+            for c in constructs
+            if c.interface_hash == semantic.interface_hash and c.kind == semantic.kind
+        ]
+        if interface_matches:
+            return interface_matches, "interface"
+
+        return [], "none"
+</file>
+
+<file path="src/codesub/api.py">
+"""FastAPI REST API for codesub subscription management."""
+
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from .config_store import ConfigStore
+from .errors import (
+    CodesubError,
+    ConfigNotFoundError,
+    SubscriptionNotFoundError,
+    InvalidLocationError,
+    InvalidLineRangeError,
+    FileNotFoundAtRefError,
+    InvalidSchemaVersionError,
+    NotAGitRepoError,
+    GitError,
+    ProjectNotFoundError,
+    InvalidProjectPathError,
+    ScanNotFoundError,
+    UnsupportedLanguageError,
+)
+from .git_repo import GitRepo
+from .models import Anchor, Subscription, SemanticTarget
+from .utils import parse_location, extract_anchors, parse_target_spec, LineTarget, SemanticTargetSpec
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+from .detector import Detector
+from .updater import Updater
+from .update_doc import result_to_dict
+
+
+# --- Pydantic Schemas ---
+
+
+class AnchorSchema(BaseModel):
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+
+class SemanticTargetSchema(BaseModel):
+    """Schema for semantic subscription target."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add"
+    role: Optional[str] = None  # "const" for constants, None otherwise
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+
+class SubscriptionSchema(BaseModel):
+    id: str
+    path: str
+    start_line: int
+    end_line: int
+    label: Optional[str] = None
+    description: Optional[str] = None
+    anchors: Optional[AnchorSchema] = None
+    semantic: Optional[SemanticTargetSchema] = None
+    active: bool = True
+    trigger_on_duplicate: bool = False
+    created_at: str
+    updated_at: str
+
+
+class SubscriptionCreateRequest(BaseModel):
+    """Request body for creating a subscription."""
+
+    location: str = Field(
+        ...,
+        description="Location format: 'path:line' or 'path:start-end' for line-based, "
+        "'path::QualName' or 'path::kind:QualName' for semantic",
+    )
+    label: Optional[str] = None
+    description: Optional[str] = None
+    context: int = Field(default=2, ge=0, le=10)
+    trigger_on_duplicate: bool = Field(
+        default=False,
+        description="For semantic subscriptions: trigger alert if construct found in multiple files"
+    )
+
+
+class SubscriptionUpdateRequest(BaseModel):
+    """Request body for updating a subscription."""
+
+    label: Optional[str] = None
+    description: Optional[str] = None
+    trigger_on_duplicate: Optional[bool] = None
+
+
+class SubscriptionListResponse(BaseModel):
+    subscriptions: list[SubscriptionSchema]
+    count: int
+    baseline_ref: str
+    baseline_title: str = ""
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_type: str
+
+
+# --- Project Schemas ---
+
+
+class ProjectSchema(BaseModel):
+    id: str
+    name: str
+    path: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectCreateRequest(BaseModel):
+    path: str = Field(..., description="Absolute path to git repository")
+    name: Optional[str] = Field(None, description="Display name (defaults to dir name)")
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(..., description="New display name")
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectSchema]
+    count: int
+
+
+class ProjectStatusResponse(BaseModel):
+    project: ProjectSchema
+    path_exists: bool
+    codesub_initialized: bool
+    subscription_count: int
+    baseline_ref: Optional[str]
+
+
+# --- Scan Schemas ---
+
+
+class ScanRequest(BaseModel):
+    base_ref: str = Field(..., description="Base git ref (e.g., 'HEAD~1', 'baseline', commit hash)")
+    target_ref: Optional[str] = Field(default="HEAD", description="Target git ref ('HEAD', commit hash), or empty/null for working directory")
+
+
+class TriggerSchema(BaseModel):
+    subscription_id: str
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]
+    label: Optional[str]
+    change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
+    details: Optional[dict] = None  # Additional details for semantic triggers
+
+
+class ProposalSchema(BaseModel):
+    subscription_id: str
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]
+    confidence: str
+    shift: Optional[int]
+    label: Optional[str]
+    new_qualname: Optional[str] = None  # For semantic subscriptions when construct renamed
+    new_kind: Optional[str] = None  # For semantic subscriptions if kind changed
+
+
+class ScanResultSchema(BaseModel):
+    base_ref: str
+    target_ref: str
+    triggers: list[TriggerSchema]
+    proposals: list[ProposalSchema]
+    unchanged_count: int
+
+
+class ScanHistoryEntrySchema(BaseModel):
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+
+
+class ScanHistoryListResponse(BaseModel):
+    scans: list[ScanHistoryEntrySchema]
+    count: int
+
+
+class ApplyUpdatesRequest(BaseModel):
+    scan_id: str = Field(..., description="Scan ID to apply proposals from")
+    proposal_ids: Optional[list[str]] = Field(
+        None,
+        description="Specific proposal IDs to apply (all if not specified)"
+    )
+
+
+class ApplyUpdatesResponse(BaseModel):
+    applied: list[str]
+    warnings: list[str]
+    new_baseline: Optional[str]
+
+
+# --- Filesystem Browser Schemas ---
+
+
+class FilesystemEntry(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+
+
+class FilesystemBrowseResponse(BaseModel):
+    current_path: str
+    parent_path: Optional[str]
+    entries: list[FilesystemEntry]
+
+
+# --- Helper Functions ---
+
+
+def get_project_store() -> ProjectStore:
+    """Get the global ProjectStore."""
+    return ProjectStore()
+
+
+def get_scan_history() -> ScanHistory:
+    """Get the global ScanHistory."""
+    return ScanHistory()
+
+
+def get_project_store_and_repo(project_id: str) -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for a specific project."""
+    project_store = get_project_store()
+    project = project_store.get_project(project_id)
+
+    repo = GitRepo(project.path)
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
+    """Convert dataclass Subscription to Pydantic schema."""
+    anchors = None
+    if sub.anchors:
+        anchors = AnchorSchema(
+            context_before=sub.anchors.context_before,
+            lines=sub.anchors.lines,
+            context_after=sub.anchors.context_after,
+        )
+    semantic = None
+    if sub.semantic:
+        semantic = SemanticTargetSchema(
+            language=sub.semantic.language,
+            kind=sub.semantic.kind,
+            qualname=sub.semantic.qualname,
+            role=sub.semantic.role,
+            interface_hash=sub.semantic.interface_hash,
+            body_hash=sub.semantic.body_hash,
+            fingerprint_version=sub.semantic.fingerprint_version,
+        )
+    return SubscriptionSchema(
+        id=sub.id,
+        path=sub.path,
+        start_line=sub.start_line,
+        end_line=sub.end_line,
+        label=sub.label,
+        description=sub.description,
+        anchors=anchors,
+        semantic=semantic,
+        active=sub.active,
+        trigger_on_duplicate=sub.trigger_on_duplicate,
+        created_at=sub.created_at,
+        updated_at=sub.updated_at,
+    )
+
+
+def _create_subscription_from_request(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    request: SubscriptionCreateRequest,
+) -> Subscription:
+    """Create a subscription from a request, handling both line-based and semantic targets."""
+    from .semantic import get_indexer_for_path
+
+    target = parse_target_spec(request.location)
+
+    if isinstance(target, SemanticTargetSpec):
+        # Semantic subscription
+        lines = repo.show_file(baseline, target.path)
+        source = "\n".join(lines)
+
+        language, indexer = get_indexer_for_path(target.path)
+        construct = indexer.find_construct(
+            source, target.path, target.qualname, target.kind
+        )
+        if construct is None:
+            raise InvalidLocationError(
+                request.location,
+                f"Construct '{target.qualname}' not found. Use 'codesub symbols' to discover valid targets.",
+            )
+
+        # Extract anchors from construct lines
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, construct.start_line, construct.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        # Create semantic target
+        semantic = SemanticTarget(
+            language=language,
+            kind=construct.kind,
+            qualname=construct.qualname,
+            role=construct.role,
+            interface_hash=construct.interface_hash,
+            body_hash=construct.body_hash,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=construct.start_line,
+            end_line=construct.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+            semantic=semantic,
+            trigger_on_duplicate=request.trigger_on_duplicate,
+        )
+    else:
+        # Line-based subscription
+        lines = repo.show_file(baseline, target.path)
+
+        # Validate line range
+        if target.end_line > len(lines):
+            raise InvalidLineRangeError(
+                target.start_line,
+                target.end_line,
+                f"exceeds file length ({len(lines)} lines)",
+            )
+
+        # Extract anchors
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, target.start_line, target.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=target.start_line,
+            end_line=target.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+        )
+
+
+# --- FastAPI App ---
+
+
+app = FastAPI(
+    title="codesub API",
+    description="REST API for managing code subscriptions",
+    version="0.1.0",
+)
+
+# CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Global Exception Handler ---
+
+
+# Map exception types to HTTP status codes
+ERROR_STATUS_CODES: dict[type, int] = {
+    ConfigNotFoundError: 409,
+    SubscriptionNotFoundError: 404,
+    InvalidLocationError: 400,
+    InvalidLineRangeError: 400,
+    FileNotFoundAtRefError: 404,
+    InvalidSchemaVersionError: 500,
+    NotAGitRepoError: 500,
+    GitError: 500,
+    ProjectNotFoundError: 404,
+    InvalidProjectPathError: 400,
+    ScanNotFoundError: 404,
+    UnsupportedLanguageError: 400,
+}
+
+
+@app.exception_handler(CodesubError)
+async def codesub_error_handler(request: Request, exc: CodesubError) -> JSONResponse:
+    """Map CodesubError subclasses to appropriate HTTP responses."""
+    status_code = ERROR_STATUS_CODES.get(type(exc), 500)
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": str(exc), "error_type": type(exc).__name__},
+    )
+
+
+# --- Endpoints ---
+
+
+@app.get("/api/subscriptions", response_model=SubscriptionListResponse)
+def list_subscriptions(include_inactive: bool = Query(default=False)):
+    """List all subscriptions, optionally including inactive ones."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.get("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_subscription(sub_id: str):
+    """Get a single subscription by ID (supports partial ID matching)."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_subscription(request: SubscriptionCreateRequest):
+    """Create a new subscription (line-based or semantic)."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description.
+
+    PATCH semantics:
+    - Omitted field: keep existing value
+    - Empty string "": clear to null
+    - Explicit null: clear to null
+    """
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    # Get the fields that were actually sent in the request
+    update_data = request.model_dump(exclude_unset=True)
+
+    # Update fields if provided
+    if "label" in update_data:
+        # Empty string becomes None
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        # Empty string becomes None
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_subscription(sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_subscription(sub_id: str):
+    """Reactivate a deactivated subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint. Always returns 200."""
+    try:
+        store, repo = get_store_and_repo()
+        config_exists = store.exists()
+        baseline_ref = None
+        if config_exists:
+            config = store.load()
+            baseline_ref = config.repo.baseline_ref
+        return {
+            "status": "ok",
+            "config_initialized": config_exists,
+            "repo_root": str(repo.root),
+            "baseline_ref": baseline_ref,
+        }
+    except NotAGitRepoError:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": "Not running in a git repository",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": str(e),
+        }
+
+
+# --- Project Endpoints ---
+
+
+@app.get("/api/projects", response_model=ProjectListResponse)
+def list_projects():
+    """List all registered projects."""
+    store = get_project_store()
+    projects = store.list_projects()
+    return ProjectListResponse(
+        projects=[ProjectSchema(**p.to_dict()) for p in projects],
+        count=len(projects),
+    )
+
+
+@app.post("/api/projects", response_model=ProjectSchema, status_code=201)
+def create_project(request: ProjectCreateRequest):
+    """Register a new project."""
+    store = get_project_store()
+    project = store.add_project(path=request.path, name=request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
+def get_project_status(project_id: str):
+    """Get project details and status."""
+    store = get_project_store()
+    status = store.get_project_status(project_id)
+    return ProjectStatusResponse(
+        project=ProjectSchema(**status["project"]),
+        path_exists=status["path_exists"],
+        codesub_initialized=status["codesub_initialized"],
+        subscription_count=status["subscription_count"],
+        baseline_ref=status["baseline_ref"],
+    )
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectSchema)
+def update_project(project_id: str, request: ProjectUpdateRequest):
+    """Update project name."""
+    store = get_project_store()
+    project = store.update_project(project_id, request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.delete("/api/projects/{project_id}", response_model=ProjectSchema)
+def delete_project(project_id: str):
+    """Remove a project from the registry."""
+    store = get_project_store()
+    project = store.remove_project(project_id)
+    return ProjectSchema(**project.to_dict())
+
+
+# --- Project Subscriptions Endpoints ---
+
+
+@app.get("/api/projects/{project_id}/subscriptions", response_model=SubscriptionListResponse)
+def list_project_subscriptions(
+    project_id: str,
+    include_inactive: bool = Query(default=False)
+):
+    """List subscriptions for a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
+    """Create a new subscription in a specific project (line-based or semantic)."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_project_subscription(project_id: str, sub_id: str):
+    """Get a single subscription by ID within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_project_subscription(project_id: str, sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    update_data = request.model_dump(exclude_unset=True)
+
+    if "label" in update_data:
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_project_subscription(project_id: str, sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/projects/{project_id}/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_project_subscription(project_id: str, sub_id: str):
+    """Reactivate a deactivated subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+# --- Scan Endpoints ---
+
+
+@app.post("/api/projects/{project_id}/scan", response_model=ScanHistoryEntrySchema)
+def run_project_scan(project_id: str, request: ScanRequest):
+    """
+    Run a scan for a project and save to history.
+
+    Special ref values:
+    - "baseline": Use project's configured baseline ref
+    - "HEAD~N": N commits back from HEAD
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Resolve refs
+    base_ref = request.base_ref
+    target_ref = request.target_ref
+
+    # Handle special values
+    if base_ref == "baseline":
+        base_ref = config.repo.baseline_ref
+
+    # Resolve to commit hashes (empty target_ref means working directory)
+    base_ref = repo.resolve_ref(base_ref)
+    if target_ref:
+        target_ref = repo.resolve_ref(target_ref)
+    else:
+        target_ref = None  # Working directory
+
+    # Run scan
+    detector = Detector(repo)
+    result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+    # Convert to dict and save to history
+    result_dict = result_to_dict(result)
+    history = get_scan_history()
+    entry = history.save_scan(project_id, result_dict)
+
+    return ScanHistoryEntrySchema(
+        id=entry.id,
+        project_id=entry.project_id,
+        base_ref=entry.base_ref,
+        target_ref=entry.target_ref,
+        trigger_count=entry.trigger_count,
+        proposal_count=entry.proposal_count,
+        unchanged_count=entry.unchanged_count,
+        created_at=entry.created_at,
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history", response_model=ScanHistoryListResponse)
+def list_scan_history(
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100)
+):
+    """List scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entries = history.list_scans(project_id, limit=limit)
+
+    return ScanHistoryListResponse(
+        scans=[
+            ScanHistoryEntrySchema(
+                id=e.id,
+                project_id=e.project_id,
+                base_ref=e.base_ref,
+                target_ref=e.target_ref,
+                trigger_count=e.trigger_count,
+                proposal_count=e.proposal_count,
+                unchanged_count=e.unchanged_count,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ],
+        count=len(entries),
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history/{scan_id}")
+def get_scan_result(project_id: str, scan_id: str):
+    """Get a specific scan result with full details."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entry = history.get_scan(project_id, scan_id)
+
+    return entry.to_dict()
+
+
+@app.delete("/api/projects/{project_id}/scan-history")
+def clear_project_scan_history(project_id: str):
+    """Clear all scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    count = history.clear_project_history(project_id)
+
+    return {"deleted": count}
+
+
+@app.delete("/api/scan-history")
+def clear_all_scan_history():
+    """Clear all scan history for all projects."""
+    history = get_scan_history()
+    count = history.clear_all_history()
+
+    return {"deleted": count}
+
+
+# --- Apply Updates Endpoint ---
+
+
+@app.post("/api/projects/{project_id}/apply-updates", response_model=ApplyUpdatesResponse)
+def apply_project_updates(project_id: str, request: ApplyUpdatesRequest):
+    """
+    Apply proposals from a scan result.
+
+    Updates subscriptions and advances baseline to the scan's target_ref.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+
+    # Get the scan result
+    history = get_scan_history()
+    entry = history.get_scan(project_id, request.scan_id)
+    scan_result = entry.scan_result
+
+    # Filter proposals if specific IDs requested
+    proposals = scan_result.get("proposals", [])
+    if request.proposal_ids:
+        proposals = [p for p in proposals if p["subscription_id"] in request.proposal_ids]
+
+    # Build update document format
+    update_data = {
+        "target_ref": scan_result.get("target_ref", ""),
+        "proposals": proposals,
+    }
+
+    # Apply updates
+    updater = Updater(store, repo)
+    applied, warnings = updater.apply(update_data)
+
+    return ApplyUpdatesResponse(
+        applied=applied,
+        warnings=warnings,
+        new_baseline=scan_result.get("target_ref") if applied else None,
+    )
+
+
+# --- Filesystem Browser Endpoint ---
+
+
+@app.get("/api/filesystem/browse", response_model=FilesystemBrowseResponse)
+def browse_filesystem(path: str = Query(default="~", description="Path to browse")):
+    """
+    Browse filesystem directories.
+
+    Used by the frontend to provide a file picker for selecting project paths.
+    Returns directories (not files) sorted alphabetically, with hidden dirs excluded.
+    Restricted to user's home directory for security.
+    """
+    home = Path.home().resolve()
+
+    # Expand ~ and resolve path
+    try:
+        expanded = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}")
+
+    # Security: restrict to home directory
+    try:
+        expanded.relative_to(home)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access restricted to home directory ({home})"
+        )
+
+    if not expanded.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    if not expanded.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+    # Get parent path (None if at home directory)
+    if expanded == home:
+        parent_path = None
+    else:
+        parent = expanded.parent
+        # Ensure parent is still within home
+        try:
+            parent.relative_to(home)
+            parent_path = str(parent)
+        except ValueError:
+            parent_path = None
+
+    # List directory entries (directories only, exclude hidden)
+    entries: list[FilesystemEntry] = []
+    try:
+        for item in sorted(expanded.iterdir(), key=lambda p: p.name.lower()):
+            try:
+                # Skip hidden directories
+                if item.name.startswith("."):
+                    continue
+                # Skip symlinks to avoid escaping home directory
+                if item.is_symlink():
+                    continue
+                if item.is_dir():
+                    entries.append(
+                        FilesystemEntry(
+                            name=item.name,
+                            path=str(item),
+                            is_dir=True,
+                        )
+                    )
+            except OSError:
+                # Skip entries that can't be inspected (broken symlinks, etc.)
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+
+    return FilesystemBrowseResponse(
+        current_path=str(expanded),
+        parent_path=parent_path,
+        entries=entries,
+    )
+</file>
+
+</files>

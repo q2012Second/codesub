@@ -1,0 +1,3981 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: src/codesub/api.py, src/codesub/git_repo.py, src/codesub/models.py, src/codesub/cli.py, src/codesub/semantic/registry.py, src/codesub/semantic/construct.py, src/codesub/semantic/indexer_protocol.py, src/codesub/errors.py, frontend/src/components/SubscriptionForm.tsx, frontend/src/components/FileBrowserModal.tsx, frontend/src/api.ts, frontend/src/types.ts, tests/test_api.py
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+frontend/
+  src/
+    components/
+      FileBrowserModal.tsx
+      SubscriptionForm.tsx
+    api.ts
+    types.ts
+src/
+  codesub/
+    semantic/
+      construct.py
+      indexer_protocol.py
+      registry.py
+    api.py
+    cli.py
+    errors.py
+    git_repo.py
+    models.py
+tests/
+  test_api.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="frontend/src/components/FileBrowserModal.tsx">
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { browseFilesystem } from '../api';
+import type { FilesystemEntry } from '../types';
+
+interface FileBrowserModalProps {
+  initialPath?: string;
+  onSelect: (path: string) => void;
+  onCancel: () => void;
+}
+
+export function FileBrowserModal({
+  initialPath = '~',
+  onSelect,
+  onCancel,
+}: FileBrowserModalProps) {
+  const [currentPath, setCurrentPath] = useState<string>('');
+  const [parentPath, setParentPath] = useState<string | null>(null);
+  const [entries, setEntries] = useState<FilesystemEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Track request ID to prevent race conditions
+  const requestIdRef = useRef(0);
+  // Ref for focus management
+  const modalRef = useRef<HTMLDivElement>(null);
+
+  const loadDirectory = useCallback(async (path: string) => {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await browseFilesystem(path);
+      // Only update state if this is still the latest request
+      if (requestId === requestIdRef.current) {
+        setCurrentPath(result.current_path);
+        setParentPath(result.parent_path);
+        setEntries(result.entries);
+      }
+    } catch (e) {
+      if (requestId === requestIdRef.current) {
+        setError(e instanceof Error ? e.message : 'Failed to load directory');
+      }
+    } finally {
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDirectory(initialPath);
+  }, [initialPath, loadDirectory]);
+
+  // Handle Escape key to close modal
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [onCancel]);
+
+  // Focus modal on mount
+  useEffect(() => {
+    modalRef.current?.focus();
+  }, []);
+
+  const handleEntryClick = (entry: FilesystemEntry) => {
+    if (entry.is_dir) {
+      loadDirectory(entry.path);
+    }
+  };
+
+  const handleEntryKeyDown = (e: React.KeyboardEvent, entry: FilesystemEntry) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleEntryClick(entry);
+    }
+  };
+
+  const handleGoUp = () => {
+    if (parentPath) {
+      loadDirectory(parentPath);
+    }
+  };
+
+  const handleGoUpKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      handleGoUp();
+    }
+  };
+
+  const handleSelect = () => {
+    onSelect(currentPath);
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+      }}
+      onClick={onCancel}
+    >
+      <div
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="file-browser-title"
+        tabIndex={-1}
+        style={{
+          background: 'white',
+          borderRadius: 8,
+          padding: 24,
+          maxWidth: 600,
+          width: '90%',
+          maxHeight: '80vh',
+          display: 'flex',
+          flexDirection: 'column',
+          outline: 'none',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h3 id="file-browser-title" style={{ marginBottom: 16, marginTop: 0 }}>
+          Select Folder
+        </h3>
+
+        {/* Current path display */}
+        <div
+          style={{
+            padding: '8px 12px',
+            background: '#f5f5f5',
+            borderRadius: 4,
+            marginBottom: 12,
+            fontFamily: 'monospace',
+            fontSize: 13,
+            wordBreak: 'break-all',
+          }}
+        >
+          {currentPath || 'Loading...'}
+        </div>
+
+        {/* Error message */}
+        {error && (
+          <div
+            role="alert"
+            style={{
+              padding: 12,
+              background: '#fee',
+              color: '#c00',
+              borderRadius: 4,
+              marginBottom: 12,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {/* Directory listing */}
+        <div
+          role="listbox"
+          aria-label="Directory contents"
+          style={{
+            flex: 1,
+            border: '1px solid #ddd',
+            borderRadius: 4,
+            overflow: 'auto',
+            minHeight: 200,
+            maxHeight: 400,
+          }}
+        >
+          {loading ? (
+            <div style={{ padding: 16, color: '#666' }}>Loading...</div>
+          ) : (
+            <>
+              {/* Go up button */}
+              {parentPath && (
+                <div
+                  role="option"
+                  tabIndex={0}
+                  onClick={handleGoUp}
+                  onKeyDown={handleGoUpKeyDown}
+                  style={{
+                    padding: '10px 12px',
+                    borderBottom: '1px solid #eee',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  onFocus={e => (e.currentTarget.style.background = '#f5f5f5')}
+                  onBlur={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ fontSize: 16 }} aria-hidden="true">↑</span>
+                  <span>..</span>
+                </div>
+              )}
+
+              {/* Directory entries */}
+              {entries.length === 0 && !parentPath ? (
+                <div style={{ padding: 16, color: '#666' }}>Empty directory</div>
+              ) : (
+                entries.map(entry => (
+                  <div
+                    key={entry.path}
+                    role="option"
+                    tabIndex={0}
+                    onClick={() => handleEntryClick(entry)}
+                    onKeyDown={(e) => handleEntryKeyDown(e, entry)}
+                    style={{
+                      padding: '10px 12px',
+                      borderBottom: '1px solid #eee',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    onFocus={e => (e.currentTarget.style.background = '#f5f5f5')}
+                    onBlur={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span style={{ fontSize: 16 }} aria-hidden="true">📁</span>
+                    <span>{entry.name}</span>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Action buttons */}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              padding: '8px 16px',
+              border: '1px solid #ddd',
+              borderRadius: 4,
+              cursor: 'pointer',
+              background: 'white',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSelect}
+            disabled={loading || !currentPath}
+            style={{
+              background: '#0066cc',
+              color: 'white',
+              border: '1px solid #0066cc',
+              padding: '8px 16px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              opacity: loading || !currentPath ? 0.5 : 1,
+            }}
+          >
+            Select This Folder
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="src/codesub/semantic/construct.py">
+"""Construct dataclass for semantic code analysis."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Construct:
+    """A parsed code construct.
+
+    Represents a semantic unit extracted from source code, such as a
+    class, method, field, or variable. Used for semantic subscriptions
+    that track code by identity rather than line numbers.
+
+    Attributes:
+        path: File path where the construct is defined.
+        kind: Type of construct. Valid values:
+            - "variable": Module-level variable
+            - "field": Class field or attribute
+            - "method": Method or function within a class
+            - "class": Class declaration
+            - "interface": Interface declaration (Java)
+            - "enum": Enum declaration
+        qualname: Qualified name of the construct.
+            - Simple: "MAX_RETRIES", "User"
+            - Nested: "User.role", "Calculator.add(int,int)"
+            - Java overloads include param types: "add(int,int)"
+        role: Optional role modifier.
+            - "const": For constants (UPPER_CASE naming)
+            - None: For regular constructs
+        start_line: 1-based start line number.
+        end_line: 1-based end line number (inclusive).
+        interface_hash: Hash of the construct's interface/signature.
+            Changes indicate structural changes (type annotations, parameters).
+        body_hash: Hash of the construct's body/value.
+            Changes indicate content changes (implementation, value).
+        has_parse_error: True if the file had parse errors.
+    """
+
+    path: str
+    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "Calculator.add(int,int)"
+    role: str | None  # "const" for constants
+    start_line: int
+    end_line: int
+    interface_hash: str
+    body_hash: str
+    has_parse_error: bool = False
+</file>
+
+<file path="src/codesub/semantic/indexer_protocol.py">
+"""Protocol definition for semantic indexers."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from .construct import Construct
+
+
+class SemanticIndexer(Protocol):
+    """Protocol for language-specific semantic indexers.
+
+    Implementations extract semantic constructs from source code,
+    enabling semantic subscriptions that track code by identity
+    rather than line numbers.
+
+    Each implementation handles a specific programming language
+    (e.g., PythonIndexer, JavaIndexer).
+    """
+
+    def index_file(self, source: str, path: str) -> list[Construct]:
+        """Extract all constructs from source code.
+
+        Args:
+            source: The complete source code content.
+            path: File path (used in construct metadata).
+
+        Returns:
+            List of all discoverable constructs in the file.
+        """
+        ...
+
+    def find_construct(
+        self, source: str, path: str, qualname: str, kind: str | None = None
+    ) -> Construct | None:
+        """Find a specific construct by qualified name.
+
+        Args:
+            source: The complete source code content.
+            path: File path (used in construct metadata).
+            qualname: Qualified name to search for (e.g., "User.validate").
+            kind: Optional kind filter for disambiguation.
+
+        Returns:
+            The matching construct, or None if not found or ambiguous.
+        """
+        ...
+</file>
+
+<file path="src/codesub/semantic/registry.py">
+"""Registry for semantic indexers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable
+
+from ..errors import UnsupportedLanguageError
+
+if TYPE_CHECKING:
+    from .indexer_protocol import SemanticIndexer
+
+# Global registry state
+_language_factories: dict[str, Callable[[], SemanticIndexer]] = {}
+_extension_to_language: dict[str, str] = {}
+_indexer_cache: dict[str, SemanticIndexer] = {}
+
+
+def register_indexer(
+    language: str,
+    extensions: list[str],
+    factory: Callable[[], SemanticIndexer],
+) -> None:
+    """Register an indexer factory for a language.
+
+    Args:
+        language: Language identifier (e.g., "python", "java").
+        extensions: File extensions to associate (e.g., [".py", ".pyw"]).
+        factory: Callable that returns a SemanticIndexer instance.
+    """
+    _language_factories[language] = factory
+    for ext in extensions:
+        _extension_to_language[ext.lower()] = language
+
+
+def detect_language(path: str) -> str:
+    """Detect the programming language from a file path.
+
+    Args:
+        path: File path to analyze.
+
+    Returns:
+        Language identifier (e.g., "python", "java").
+
+    Raises:
+        UnsupportedLanguageError: If the file extension is not recognized.
+    """
+    ext = Path(path).suffix.lower()
+    if ext not in _extension_to_language:
+        raise UnsupportedLanguageError(
+            language=ext or "<no extension>",
+            supported=sorted(_language_factories.keys()),
+            hint=f"File '{path}' has no registered indexer.",
+        )
+    return _extension_to_language[ext]
+
+
+def get_indexer(language: str) -> SemanticIndexer:
+    """Get an indexer instance for a language.
+
+    Args:
+        language: Language identifier (e.g., "python", "java").
+
+    Returns:
+        A SemanticIndexer instance for the language.
+
+    Raises:
+        UnsupportedLanguageError: If the language is not supported.
+    """
+    if language not in _language_factories:
+        raise UnsupportedLanguageError(
+            language=language,
+            supported=sorted(_language_factories.keys()),
+        )
+
+    # Use cached indexer if available
+    if language not in _indexer_cache:
+        _indexer_cache[language] = _language_factories[language]()
+    return _indexer_cache[language]
+
+
+def get_indexer_for_path(path: str) -> tuple[str, SemanticIndexer]:
+    """Get an indexer for a file path.
+
+    Args:
+        path: File path to get indexer for.
+
+    Returns:
+        Tuple of (language, indexer).
+
+    Raises:
+        UnsupportedLanguageError: If the file extension is not recognized.
+    """
+    language = detect_language(path)
+    return language, get_indexer(language)
+
+
+def supported_languages() -> list[str]:
+    """Get list of supported language identifiers.
+
+    Returns:
+        Sorted list of language identifiers.
+    """
+    return sorted(_language_factories.keys())
+
+
+def clear_registry() -> None:
+    """Clear the registry. Mainly for testing."""
+    _language_factories.clear()
+    _extension_to_language.clear()
+    _indexer_cache.clear()
+</file>
+
+<file path="tests/test_api.py">
+"""Tests for the FastAPI API."""
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def api_client(git_repo, monkeypatch):
+    """Create test client with git repo context."""
+    # Change to the git repo directory so GitRepo() finds it
+    monkeypatch.chdir(git_repo)
+
+    # Initialize codesub
+    from codesub.config_store import ConfigStore
+    from codesub.git_repo import GitRepo
+
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    store.init(repo.head())
+
+    # Now import and create the test client
+    from codesub.api import app
+
+    return TestClient(app)
+
+
+class TestHealthCheck:
+    def test_health_initialized(self, api_client):
+        response = api_client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ok"
+        assert data["config_initialized"] is True
+        assert "baseline_ref" in data
+
+    def test_health_not_initialized(self, git_repo, monkeypatch):
+        """Test health check when config is not initialized."""
+        monkeypatch.chdir(git_repo)
+        from codesub.api import app
+
+        client = TestClient(app)
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["config_initialized"] is False
+
+
+class TestListSubscriptions:
+    def test_empty_list(self, api_client):
+        response = api_client.get("/api/subscriptions")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["subscriptions"] == []
+        assert data["count"] == 0
+        assert "baseline_ref" in data
+
+    def test_list_with_subscriptions(self, api_client):
+        # Create a subscription first
+        create_response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1-3", "label": "Test"}
+        )
+        assert create_response.status_code == 201
+
+        # Now list
+        response = api_client.get("/api/subscriptions")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["subscriptions"][0]["label"] == "Test"
+
+    def test_list_excludes_inactive_by_default(self, api_client):
+        # Create and deactivate a subscription
+        create_response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_response.json()["id"]
+        api_client.delete(f"/api/subscriptions/{sub_id}")
+
+        # List without include_inactive
+        response = api_client.get("/api/subscriptions")
+        assert response.json()["count"] == 0
+
+        # List with include_inactive
+        response = api_client.get("/api/subscriptions?include_inactive=true")
+        assert response.json()["count"] == 1
+
+
+class TestCreateSubscription:
+    def test_create_success(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={
+                "location": "test.txt:2-4",
+                "label": "Important section",
+                "description": "Watch this",
+            }
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["path"] == "test.txt"
+        assert data["start_line"] == 2
+        assert data["end_line"] == 4
+        assert data["label"] == "Important section"
+        assert data["description"] == "Watch this"
+        assert data["active"] is True
+        assert "id" in data
+        assert data["anchors"] is not None
+
+    def test_create_single_line(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:3"}
+        )
+        assert response.status_code == 201
+        data = response.json()
+        assert data["start_line"] == 3
+        assert data["end_line"] == 3
+
+    def test_create_invalid_location_format(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "invalid"}
+        )
+        assert response.status_code == 400
+        assert "InvalidLocationError" in response.json().get("error_type", "")
+
+    def test_create_file_not_found(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "nonexistent.txt:1"}
+        )
+        assert response.status_code == 404
+
+    def test_create_line_out_of_range(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:100"}
+        )
+        assert response.status_code == 400
+        assert "exceeds file length" in response.json()["detail"]
+
+    def test_create_with_context(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:3", "context": 1}
+        )
+        assert response.status_code == 201
+        data = response.json()
+        # With context=1, should have at most 1 line before/after
+        assert len(data["anchors"]["context_before"]) <= 1
+        assert len(data["anchors"]["context_after"]) <= 1
+
+    def test_create_context_out_of_range(self, api_client):
+        response = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1", "context": 15}
+        )
+        # Pydantic validation should reject context > 10
+        assert response.status_code == 422
+
+
+class TestGetSubscription:
+    def test_get_by_full_id(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Get
+        response = api_client.get(f"/api/subscriptions/{sub_id}")
+        assert response.status_code == 200
+        assert response.json()["id"] == sub_id
+
+    def test_get_by_partial_id(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Get by first 8 chars
+        response = api_client.get(f"/api/subscriptions/{sub_id[:8]}")
+        assert response.status_code == 200
+        assert response.json()["id"] == sub_id
+
+    def test_get_not_found(self, api_client):
+        response = api_client.get("/api/subscriptions/nonexistent")
+        assert response.status_code == 404
+
+
+class TestUpdateSubscription:
+    def test_update_label(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1", "label": "Old"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Update
+        response = api_client.patch(
+            f"/api/subscriptions/{sub_id}",
+            json={"label": "New"}
+        )
+        assert response.status_code == 200
+        assert response.json()["label"] == "New"
+
+    def test_update_description(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Update
+        response = api_client.patch(
+            f"/api/subscriptions/{sub_id}",
+            json={"description": "New description"}
+        )
+        assert response.status_code == 200
+        assert response.json()["description"] == "New description"
+
+    def test_update_empty_string_clears_field(self, api_client):
+        # Create with label
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1", "label": "Old Label"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Update with empty string should clear
+        response = api_client.patch(
+            f"/api/subscriptions/{sub_id}",
+            json={"label": ""}
+        )
+        assert response.status_code == 200
+        assert response.json()["label"] is None
+
+    def test_update_preserves_unset_fields(self, api_client):
+        # Create with label and description
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1", "label": "Label", "description": "Desc"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Update only label
+        response = api_client.patch(
+            f"/api/subscriptions/{sub_id}",
+            json={"label": "New Label"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["label"] == "New Label"
+        assert data["description"] == "Desc"  # Preserved
+
+    def test_update_not_found(self, api_client):
+        response = api_client.patch(
+            "/api/subscriptions/nonexistent",
+            json={"label": "Test"}
+        )
+        assert response.status_code == 404
+
+
+class TestDeleteSubscription:
+    def test_soft_delete(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Soft delete
+        response = api_client.delete(f"/api/subscriptions/{sub_id}")
+        assert response.status_code == 200
+        assert response.json()["active"] is False
+
+        # Should not appear in default list
+        list_resp = api_client.get("/api/subscriptions")
+        assert list_resp.json()["count"] == 0
+
+        # Should appear with include_inactive
+        list_resp = api_client.get("/api/subscriptions?include_inactive=true")
+        assert list_resp.json()["count"] == 1
+
+    def test_hard_delete(self, api_client):
+        # Create
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Hard delete
+        response = api_client.delete(f"/api/subscriptions/{sub_id}?hard=true")
+        assert response.status_code == 200
+
+        # Should not appear even with include_inactive
+        list_resp = api_client.get("/api/subscriptions?include_inactive=true")
+        assert list_resp.json()["count"] == 0
+
+    def test_delete_not_found(self, api_client):
+        response = api_client.delete("/api/subscriptions/nonexistent")
+        assert response.status_code == 404
+
+
+class TestReactivateSubscription:
+    def test_reactivate(self, api_client):
+        # Create and deactivate
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+        api_client.delete(f"/api/subscriptions/{sub_id}")
+
+        # Reactivate
+        response = api_client.post(f"/api/subscriptions/{sub_id}/reactivate")
+        assert response.status_code == 200
+        assert response.json()["active"] is True
+
+    def test_reactivate_already_active(self, api_client):
+        # Create (already active)
+        create_resp = api_client.post(
+            "/api/subscriptions",
+            json={"location": "test.txt:1"}
+        )
+        sub_id = create_resp.json()["id"]
+
+        # Try to reactivate
+        response = api_client.post(f"/api/subscriptions/{sub_id}/reactivate")
+        assert response.status_code == 400
+        assert "already active" in response.json()["detail"].lower()
+
+    def test_reactivate_not_found(self, api_client):
+        response = api_client.post("/api/subscriptions/nonexistent/reactivate")
+        assert response.status_code == 404
+
+
+class TestConfigNotInitialized:
+    def test_list_when_not_initialized(self, git_repo, monkeypatch):
+        """Test that API returns 409 when config is not initialized."""
+        monkeypatch.chdir(git_repo)
+        from codesub.api import app
+
+        client = TestClient(app)
+        response = client.get("/api/subscriptions")
+        assert response.status_code == 409
+        assert "init" in response.json()["detail"].lower()
+</file>
+
+<file path="src/codesub/git_repo.py">
+"""Git repository wrapper for codesub."""
+
+import subprocess
+from pathlib import Path
+
+from .errors import FileNotFoundAtRefError, GitError, NotAGitRepoError
+from .utils import normalize_path
+
+
+class GitRepo:
+    """Wrapper for git operations."""
+
+    def __init__(self, start_dir: str | Path = "."):
+        """
+        Initialize GitRepo by finding the repository root.
+
+        Args:
+            start_dir: Directory to start searching from.
+
+        Raises:
+            NotAGitRepoError: If not inside a git repository.
+        """
+        self._start_dir = Path(start_dir).resolve()
+        self._root: Path | None = None
+
+    @property
+    def root(self) -> Path:
+        """Get the repository root directory (cached)."""
+        if self._root is None:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=self._start_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise NotAGitRepoError(str(self._start_dir))
+            self._root = Path(result.stdout.strip())
+        return self._root
+
+    def head(self) -> str:
+        """Get the current HEAD commit hash."""
+        return self.resolve_ref("HEAD")
+
+    def commit_title(self, ref: str, max_length: int = 50) -> str:
+        """
+        Get the commit title (subject line) for a ref.
+
+        Args:
+            ref: Git ref (commit hash, branch name, etc.).
+            max_length: Maximum length before truncation (0 = no limit).
+
+        Returns:
+            Commit subject line, possibly truncated with "...".
+        """
+        result = subprocess.run(
+            ["git", "log", "--format=%s", "-n", "1", ref],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return ""
+        title = result.stdout.strip()
+        if max_length > 0 and len(title) > max_length:
+            title = title[: max_length - 3] + "..."
+        return title
+
+    def resolve_ref(self, ref: str) -> str:
+        """
+        Resolve a git ref to a full commit hash.
+
+        Args:
+            ref: Git ref (e.g., "HEAD", "main", commit hash).
+
+        Returns:
+            Full commit hash.
+
+        Raises:
+            GitError: If ref cannot be resolved.
+        """
+        result = subprocess.run(
+            ["git", "rev-parse", ref],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git rev-parse {ref}", result.stderr.strip())
+        return result.stdout.strip()
+
+    def show_file(self, ref: str, path: str) -> list[str]:
+        """
+        Get file content at a specific ref.
+
+        Args:
+            ref: Git ref (commit hash, branch name, etc.).
+            path: Repo-relative path to the file.
+
+        Returns:
+            List of lines (without trailing newlines).
+
+        Raises:
+            FileNotFoundAtRefError: If file doesn't exist at ref.
+            GitError: If git command fails for other reasons.
+        """
+        path = normalize_path(path)
+        result = subprocess.run(
+            ["git", "show", f"{ref}:{path}"],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "does not exist" in stderr or "exists on disk" in stderr:
+                raise FileNotFoundAtRefError(path, ref)
+            raise GitError(f"git show {ref}:{path}", stderr)
+
+        # Split into lines, preserving empty lines but removing trailing newline
+        content = result.stdout
+        if content.endswith("\n"):
+            content = content[:-1]
+        if not content:
+            return []
+        return content.split("\n")
+
+    def diff_patch(self, base: str, target: str | None = None) -> str:
+        """
+        Get unified diff between two refs, or between a ref and working directory.
+
+        Uses -U0 for minimal context (just hunks).
+
+        Args:
+            base: Base ref.
+            target: Target ref, or None/empty for working directory.
+
+        Returns:
+            Diff text (may be empty if no changes).
+        """
+        if target:
+            cmd = ["git", "diff", "-U0", "--find-renames", base, target]
+        else:
+            # Compare base to working directory (uncommitted changes)
+            cmd = ["git", "diff", "-U0", "--find-renames", base]
+        result = subprocess.run(
+            cmd,
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff {base} {target or '(working)'}", result.stderr.strip())
+        return result.stdout
+
+    def diff_name_status(self, base: str, target: str | None = None) -> str:
+        """
+        Get name-status diff between two refs, or between a ref and working directory.
+
+        Args:
+            base: Base ref.
+            target: Target ref, or None/empty for working directory.
+
+        Returns:
+            Name-status output text.
+        """
+        if target:
+            cmd = ["git", "diff", "--name-status", "-M", "--find-renames", base, target]
+        else:
+            cmd = ["git", "diff", "--name-status", "-M", "--find-renames", base]
+        result = subprocess.run(
+            cmd,
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise GitError(f"git diff --name-status {base} {target or '(working)'}", result.stderr.strip())
+        return result.stdout
+
+    def file_line_count(self, ref: str, path: str) -> int:
+        """Get the number of lines in a file at a ref."""
+        lines = self.show_file(ref, path)
+        return len(lines)
+
+    def relative_path(self, abs_path: str | Path) -> str:
+        """
+        Convert an absolute path to a repo-relative path.
+
+        Args:
+            abs_path: Absolute or relative path.
+
+        Returns:
+            Repo-relative POSIX path.
+        """
+        path = Path(abs_path).resolve()
+        try:
+            rel = path.relative_to(self.root)
+            return normalize_path(str(rel))
+        except ValueError:
+            # Path is not inside repo, return as-is normalized
+            return normalize_path(str(path))
+</file>
+
+<file path="frontend/src/components/SubscriptionForm.tsx">
+import { useState } from 'react';
+import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest } from '../types';
+import { createProjectSubscription, updateProjectSubscription } from '../api';
+
+interface Props {
+  subscription: Subscription | null;  // null = create mode
+  projectId: string;
+  onCancel: () => void;
+  onSaved: (sub: Subscription, isNew: boolean) => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+}
+
+export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, showMessage }: Props) {
+  const isEdit = subscription !== null;
+
+  const [location, setLocation] = useState('');
+  const [label, setLabel] = useState(subscription?.label || '');
+  const [description, setDescription] = useState(subscription?.description || '');
+  const [context, setContext] = useState(2);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+
+    try {
+      let result: Subscription;
+
+      if (isEdit && subscription) {
+        const data: SubscriptionUpdateRequest = {
+          label: label || undefined,
+          description: description || undefined,
+        };
+        result = await updateProjectSubscription(projectId, subscription.id, data);
+      } else {
+        const data: SubscriptionCreateRequest = {
+          location,
+          label: label || undefined,
+          description: description || undefined,
+          context,
+        };
+        result = await createProjectSubscription(projectId, data);
+      }
+
+      onSaved(result, !isEdit);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save';
+      setError(msg);
+      showMessage('error', msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <h2 style={{ marginBottom: 20, fontSize: 18 }}>
+        {isEdit ? 'Edit Subscription' : 'Create Subscription'}
+      </h2>
+
+      <form onSubmit={handleSubmit} style={{ maxWidth: 500 }}>
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Location <span style={{ color: '#dc3545' }}>*</span>
+            </label>
+            <input
+              type="text"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="path/to/file.py:42 or path/to/file.py::ClassName.method"
+              required
+              style={{ width: '100%', fontFamily: 'monospace' }}
+            />
+            <small style={{ color: '#666', display: 'block', marginTop: 4 }}>
+              <strong>Line-based:</strong> path:line or path:start-end (e.g., config.py:10-25)
+              <br />
+              <strong>Semantic:</strong> path::QualifiedName (e.g., auth.py::User.validate)
+            </small>
+            {location.includes('::') && location.split('::')[1]?.trim() && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '8px 12px',
+                  background: '#d1ecf1',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  color: '#0c5460',
+                }}
+              >
+                Detected: <strong>semantic subscription</strong> - will track code construct by identity
+              </div>
+            )}
+          </div>
+        )}
+
+        {isEdit && subscription && (
+          <div style={{ marginBottom: 20, padding: 16, background: '#f8f9fa', borderRadius: 4 }}>
+            <strong>Location:</strong>{' '}
+            <code style={{ fontSize: 13 }}>
+              {subscription.semantic
+                ? `${subscription.path}::${subscription.semantic.qualname}`
+                : subscription.start_line === subscription.end_line
+                  ? `${subscription.path}:${subscription.start_line}`
+                  : `${subscription.path}:${subscription.start_line}-${subscription.end_line}`}
+            </code>
+            {subscription.semantic && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  padding: '2px 6px',
+                  borderRadius: 3,
+                  fontSize: 11,
+                  background: '#d1ecf1',
+                  color: '#0c5460',
+                }}
+              >
+                {subscription.semantic.kind}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Label
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            placeholder="Optional label"
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Description
+          </label>
+          <textarea
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Optional description"
+            rows={3}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+        </div>
+
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Context lines
+            </label>
+            <input
+              type="number"
+              value={context}
+              onChange={e => setContext(parseInt(e.target.value) || 0)}
+              min={0}
+              max={10}
+              style={{ width: 80 }}
+            />
+            <small style={{ color: '#666', marginLeft: 8 }}>
+              Lines before/after for anchors (0-10)
+            </small>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ marginBottom: 20, padding: 12, background: '#f8d7da', color: '#721c24', borderRadius: 4 }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="submit" disabled={saving} style={{ background: '#0066cc', color: 'white', borderColor: '#0066cc' }}>
+            {saving ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create')}
+          </button>
+          <button type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/api.ts">
+import type {
+  Subscription,
+  SubscriptionListResponse,
+  SubscriptionCreateRequest,
+  SubscriptionUpdateRequest,
+  ApiError,
+  Project,
+  ProjectStatus,
+  ProjectCreateRequest,
+  ProjectListResponse,
+  ScanHistoryEntry,
+  ScanHistoryEntryFull,
+  ScanHistoryListResponse,
+  ScanRequest,
+  ApplyUpdatesRequest,
+  ApplyUpdatesResponse,
+  FilesystemBrowseResponse,
+} from './types';
+
+const API_BASE = '/api';
+
+async function handleResponse<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const error: ApiError = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail);
+  }
+  return response.json();
+}
+
+export async function listSubscriptions(includeInactive: boolean = false): Promise<SubscriptionListResponse> {
+  const url = `${API_BASE}/subscriptions?include_inactive=${includeInactive}`;
+  const response = await fetch(url);
+  return handleResponse<SubscriptionListResponse>(response);
+}
+
+export async function getSubscription(id: string): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}`);
+  return handleResponse<Subscription>(response);
+}
+
+export async function createSubscription(data: SubscriptionCreateRequest): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function createProjectSubscription(
+  projectId: string,
+  data: SubscriptionCreateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function updateSubscription(id: string, data: SubscriptionUpdateRequest): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function updateProjectSubscription(
+  projectId: string,
+  id: string,
+  data: SubscriptionUpdateRequest
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function deleteSubscription(id: string, hard: boolean = false): Promise<Subscription> {
+  const url = `${API_BASE}/subscriptions/${id}?hard=${hard}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  return handleResponse<Subscription>(response);
+}
+
+export async function deleteProjectSubscription(
+  projectId: string,
+  id: string,
+  hard: boolean = false
+): Promise<Subscription> {
+  const url = `${API_BASE}/projects/${projectId}/subscriptions/${id}?hard=${hard}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  return handleResponse<Subscription>(response);
+}
+
+export async function reactivateSubscription(id: string): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/subscriptions/${id}/reactivate`, {
+    method: 'POST',
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function reactivateProjectSubscription(
+  projectId: string,
+  id: string
+): Promise<Subscription> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions/${id}/reactivate`, {
+    method: 'POST',
+  });
+  return handleResponse<Subscription>(response);
+}
+
+export async function healthCheck(): Promise<{ status: string; config_initialized: boolean; baseline_ref?: string }> {
+  const response = await fetch(`${API_BASE}/health`);
+  return response.json();
+}
+
+// --- Project API ---
+
+export async function listProjects(): Promise<ProjectListResponse> {
+  const response = await fetch(`${API_BASE}/projects`);
+  return handleResponse<ProjectListResponse>(response);
+}
+
+export async function getProjectStatus(projectId: string): Promise<ProjectStatus> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`);
+  return handleResponse<ProjectStatus>(response);
+}
+
+export async function createProject(data: ProjectCreateRequest): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return handleResponse<Project>(response);
+}
+
+export async function deleteProject(projectId: string): Promise<Project> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<Project>(response);
+}
+
+// --- Project Subscriptions ---
+
+export async function listProjectSubscriptions(
+  projectId: string,
+  includeInactive: boolean = false
+): Promise<SubscriptionListResponse> {
+  const url = `${API_BASE}/projects/${projectId}/subscriptions?include_inactive=${includeInactive}`;
+  const response = await fetch(url);
+  return handleResponse<SubscriptionListResponse>(response);
+}
+
+// --- Scan API ---
+
+export async function runScan(
+  projectId: string,
+  request: ScanRequest
+): Promise<ScanHistoryEntry> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<ScanHistoryEntry>(response);
+}
+
+export async function listScanHistory(
+  projectId: string,
+  limit: number = 50
+): Promise<ScanHistoryListResponse> {
+  const url = `${API_BASE}/projects/${projectId}/scan-history?limit=${limit}`;
+  const response = await fetch(url);
+  return handleResponse<ScanHistoryListResponse>(response);
+}
+
+export async function getScanResult(
+  projectId: string,
+  scanId: string
+): Promise<ScanHistoryEntryFull> {
+  const response = await fetch(
+    `${API_BASE}/projects/${projectId}/scan-history/${scanId}`
+  );
+  return handleResponse<ScanHistoryEntryFull>(response);
+}
+
+export async function clearProjectScanHistory(
+  projectId: string
+): Promise<{ deleted: number }> {
+  const response = await fetch(
+    `${API_BASE}/projects/${projectId}/scan-history`,
+    { method: 'DELETE' }
+  );
+  return handleResponse<{ deleted: number }>(response);
+}
+
+export async function clearAllScanHistory(): Promise<{ deleted: number }> {
+  const response = await fetch(`${API_BASE}/scan-history`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ deleted: number }>(response);
+}
+
+// --- Apply Updates ---
+
+export async function applyUpdates(
+  projectId: string,
+  request: ApplyUpdatesRequest
+): Promise<ApplyUpdatesResponse> {
+  const response = await fetch(`${API_BASE}/projects/${projectId}/apply-updates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  return handleResponse<ApplyUpdatesResponse>(response);
+}
+
+// --- Filesystem Browser API ---
+
+export async function browseFilesystem(path: string = '~'): Promise<FilesystemBrowseResponse> {
+  const url = `${API_BASE}/filesystem/browse?path=${encodeURIComponent(path)}`;
+  const response = await fetch(url);
+  return handleResponse<FilesystemBrowseResponse>(response);
+}
+</file>
+
+<file path="frontend/src/types.ts">
+export interface Anchor {
+  context_before: string[];
+  lines: string[];
+  context_after: string[];
+}
+
+export interface SemanticTarget {
+  language: string; // "python"
+  kind: string; // "variable" | "field" | "method"
+  qualname: string; // "API_VERSION" | "User.role" | "Calculator.add"
+  role?: string | null; // "const" for constants, null otherwise
+  interface_hash?: string;
+  body_hash?: string;
+  fingerprint_version?: number;
+}
+
+// Defensive union type accepting both cases (backend uses UPPERCASE, but be tolerant)
+export type ChangeType =
+  | 'STRUCTURAL'
+  | 'CONTENT'
+  | 'MISSING'
+  | 'AMBIGUOUS'
+  | 'PARSE_ERROR'
+  | 'structural'
+  | 'content'
+  | 'missing'
+  | 'ambiguous'
+  | 'parse_error';
+
+export interface Subscription {
+  id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  label: string | null;
+  description: string | null;
+  anchors: Anchor | null;
+  semantic?: SemanticTarget | null; // null/undefined for line-based subscriptions
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionListResponse {
+  subscriptions: Subscription[];
+  count: number;
+  baseline_ref: string;
+  baseline_title: string;
+}
+
+export interface SubscriptionCreateRequest {
+  location: string;
+  label?: string;
+  description?: string;
+  context?: number;
+}
+
+export interface SubscriptionUpdateRequest {
+  label?: string;
+  description?: string;
+}
+
+export interface ApiError {
+  detail: string;
+  error_type?: string;
+}
+
+export type FilterStatus = 'active' | 'all';
+
+export type View =
+  | 'projects'
+  | 'project-add'
+  | 'list'
+  | 'detail'
+  | 'create'
+  | 'edit'
+  | 'scan'
+  | 'scan-history'
+  | 'scan-detail';
+
+// Project types
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectStatus {
+  project: Project;
+  path_exists: boolean;
+  codesub_initialized: boolean;
+  subscription_count: number;
+  baseline_ref: string | null;
+}
+
+export interface ProjectCreateRequest {
+  path: string;
+  name?: string;
+}
+
+export interface ProjectListResponse {
+  projects: Project[];
+  count: number;
+}
+
+// Scan types
+export interface Trigger {
+  subscription_id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  reasons: string[];
+  label: string | null;
+  change_type?: ChangeType | null; // semantic change classification
+  details?: unknown; // Additional semantic details (string, object, or null)
+}
+
+export interface Proposal {
+  subscription_id: string;
+  old_path: string;
+  old_start: number;
+  old_end: number;
+  new_path: string;
+  new_start: number;
+  new_end: number;
+  reasons: string[];
+  confidence: string;
+  shift: number | null;
+  label: string | null;
+  new_qualname?: string | null; // For semantic renames
+  new_kind?: string | null; // For semantic kind changes
+}
+
+export interface ScanResult {
+  base_ref: string;
+  target_ref: string;
+  triggers: Trigger[];
+  proposals: Proposal[];
+}
+
+export interface ScanHistoryEntry {
+  id: string;
+  project_id: string;
+  base_ref: string;
+  target_ref: string;
+  trigger_count: number;
+  proposal_count: number;
+  unchanged_count: number;
+  created_at: string;
+}
+
+export interface ScanHistoryEntryFull extends ScanHistoryEntry {
+  scan_result: ScanResult;
+}
+
+export interface ScanRequest {
+  base_ref: string;
+  target_ref?: string;  // Empty/undefined for working directory
+}
+
+export interface ScanHistoryListResponse {
+  scans: ScanHistoryEntry[];
+  count: number;
+}
+
+export interface ApplyUpdatesRequest {
+  scan_id: string;
+  proposal_ids?: string[];
+}
+
+export interface ApplyUpdatesResponse {
+  applied: string[];
+  warnings: string[];
+  new_baseline: string | null;
+}
+
+// Filesystem browser types
+export interface FilesystemEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface FilesystemBrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  entries: FilesystemEntry[];
+}
+</file>
+
+<file path="src/codesub/errors.py">
+"""Custom exceptions for codesub."""
+
+
+class CodesubError(Exception):
+    """Base exception for all codesub errors."""
+
+    pass
+
+
+class ConfigNotFoundError(CodesubError):
+    """Raised when .codesub/subscriptions.json doesn't exist."""
+
+    def __init__(self, path: str | None = None):
+        self.path = path
+        msg = "Config not initialized. Run 'codesub init' first."
+        if path:
+            msg = f"Config not found at {path}. Run 'codesub init' first."
+        super().__init__(msg)
+
+
+class ConfigExistsError(CodesubError):
+    """Raised when trying to init but config already exists."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Config already exists at {path}. Use --force to overwrite.")
+
+
+class InvalidSchemaVersionError(CodesubError):
+    """Raised when config has an unsupported schema version."""
+
+    def __init__(self, found: int, supported: int):
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"Unsupported schema version {found}. This tool supports version {supported}."
+        )
+
+
+class SubscriptionNotFoundError(CodesubError):
+    """Raised when a subscription ID doesn't exist."""
+
+    def __init__(self, sub_id: str):
+        self.sub_id = sub_id
+        super().__init__(f"Subscription not found: {sub_id}")
+
+
+class InvalidLocationError(CodesubError):
+    """Raised when a location spec is invalid."""
+
+    def __init__(self, location: str, reason: str | None = None):
+        self.location = location
+        msg = f"Invalid location: {location}"
+        if reason:
+            msg = f"{msg} ({reason})"
+        super().__init__(msg)
+
+
+class FileNotFoundAtRefError(CodesubError):
+    """Raised when a file doesn't exist at the specified git ref."""
+
+    def __init__(self, path: str, ref: str):
+        self.path = path
+        self.ref = ref
+        super().__init__(f"File '{path}' not found at ref '{ref}'")
+
+
+class GitError(CodesubError):
+    """Raised when a git operation fails."""
+
+    def __init__(self, command: str, stderr: str):
+        self.command = command
+        self.stderr = stderr
+        super().__init__(f"Git command failed: {command}\n{stderr}")
+
+
+class NotAGitRepoError(CodesubError):
+    """Raised when not inside a git repository."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(f"Not a git repository: {path}")
+
+
+class InvalidLineRangeError(CodesubError):
+    """Raised when line range is invalid."""
+
+    def __init__(self, start: int, end: int, reason: str):
+        self.start = start
+        self.end = end
+        super().__init__(f"Invalid line range {start}-{end}: {reason}")
+
+
+class ProjectNotFoundError(CodesubError):
+    """Raised when a project ID doesn't exist."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        super().__init__(f"Project not found: {project_id}")
+
+
+class InvalidProjectPathError(CodesubError):
+    """Raised when a project path is invalid."""
+
+    def __init__(self, path: str, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"Invalid project path '{path}': {reason}")
+
+
+class ScanNotFoundError(CodesubError):
+    """Raised when a scan history entry doesn't exist."""
+
+    def __init__(self, scan_id: str):
+        self.scan_id = scan_id
+        super().__init__(f"Scan not found: {scan_id}")
+
+
+class UnsupportedLanguageError(CodesubError):
+    """Raised when a language is not supported for semantic subscriptions.
+
+    Attributes:
+        language: The unsupported language identifier.
+        supported: List of currently supported languages.
+        hint: Optional hint for the user.
+    """
+
+    def __init__(
+        self, language: str, supported: list[str], hint: str | None = None
+    ) -> None:
+        self.language = language
+        self.supported = supported
+        msg = f"Unsupported language '{language}'. Supported: {', '.join(supported) or '<none>'}."
+        if hint:
+            msg = f"{msg} {hint}"
+        super().__init__(msg)
+</file>
+
+<file path="src/codesub/models.py">
+"""Data models for codesub."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+import uuid
+
+
+def _utc_now() -> str:
+    """Return current UTC time as ISO 8601 string."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _generate_id() -> str:
+    """Generate a new subscription ID."""
+    return str(uuid.uuid4())
+
+
+@dataclass
+class SemanticTarget:
+    """Semantic identifier for a code construct."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save"
+    role: str | None = None  # "const" for constants, else None
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "language": self.language,
+            "kind": self.kind,
+            "qualname": self.qualname,
+            "role": self.role,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+            "fingerprint_version": self.fingerprint_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+        return cls(
+            language=data["language"],
+            kind=data["kind"],
+            qualname=data["qualname"],
+            role=data.get("role"),
+            interface_hash=data.get("interface_hash", ""),
+            body_hash=data.get("body_hash", ""),
+            fingerprint_version=data.get("fingerprint_version", 1),
+        )
+
+
+@dataclass
+class Anchor:
+    """Context lines around a subscription for display and future fuzzy matching."""
+
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_before": self.context_before,
+            "lines": self.lines,
+            "context_after": self.context_after,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Anchor":
+        return cls(
+            context_before=data.get("context_before", []),
+            lines=data.get("lines", []),
+            context_after=data.get("context_after", []),
+        )
+
+
+@dataclass
+class Subscription:
+    """A subscription to a file line range."""
+
+    id: str
+    path: str  # repo-relative, POSIX-style
+    start_line: int  # 1-based inclusive
+    end_line: int  # 1-based inclusive
+    label: str | None = None
+    description: str | None = None
+    anchors: Anchor | None = None
+    semantic: SemanticTarget | None = None
+    active: bool = True
+    trigger_on_duplicate: bool = False  # Trigger if construct found in multiple files
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "id": self.id,
+            "path": self.path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "active": self.active,
+            "trigger_on_duplicate": self.trigger_on_duplicate,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+        if self.label is not None:
+            result["label"] = self.label
+        if self.description is not None:
+            result["description"] = self.description
+        if self.anchors is not None:
+            result["anchors"] = self.anchors.to_dict()
+        if self.semantic is not None:
+            result["semantic"] = self.semantic.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Subscription":
+        anchors = None
+        if "anchors" in data:
+            anchors = Anchor.from_dict(data["anchors"])
+        semantic = None
+        if "semantic" in data:
+            semantic = SemanticTarget.from_dict(data["semantic"])
+        return cls(
+            id=data["id"],
+            path=data["path"],
+            start_line=data["start_line"],
+            end_line=data["end_line"],
+            label=data.get("label"),
+            description=data.get("description"),
+            anchors=anchors,
+            semantic=semantic,
+            active=data.get("active", True),
+            trigger_on_duplicate=data.get("trigger_on_duplicate", False),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        path: str,
+        start_line: int,
+        end_line: int,
+        label: str | None = None,
+        description: str | None = None,
+        anchors: Anchor | None = None,
+        semantic: "SemanticTarget | None" = None,
+        trigger_on_duplicate: bool = False,
+    ) -> "Subscription":
+        """Create a new subscription with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            label=label,
+            description=description,
+            anchors=anchors,
+            semantic=semantic,
+            active=True,
+            trigger_on_duplicate=trigger_on_duplicate,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class RepoConfig:
+    """Repository-level configuration."""
+
+    baseline_ref: str
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "baseline_ref": self.baseline_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RepoConfig":
+        return cls(
+            baseline_ref=data["baseline_ref"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+
+@dataclass
+class Config:
+    """Full configuration containing repo config and subscriptions."""
+
+    schema_version: int
+    repo: RepoConfig
+    subscriptions: list[Subscription]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repo": self.repo.to_dict(),
+            "subscriptions": [s.to_dict() for s in self.subscriptions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Config":
+        return cls(
+            schema_version=data["schema_version"],
+            repo=RepoConfig.from_dict(data["repo"]),
+            subscriptions=[Subscription.from_dict(s) for s in data.get("subscriptions", [])],
+        )
+
+    @classmethod
+    def create(cls, baseline_ref: str) -> "Config":
+        """Create a new config with the given baseline ref."""
+        return cls(
+            schema_version=1,
+            repo=RepoConfig(baseline_ref=baseline_ref),
+            subscriptions=[],
+        )
+
+
+# Models for diff parsing
+
+
+@dataclass
+class Hunk:
+    """A single hunk from a unified diff."""
+
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+
+
+@dataclass
+class FileDiff:
+    """Diff information for a single file."""
+
+    old_path: str
+    new_path: str
+    hunks: list[Hunk]
+    is_rename: bool = False
+    is_new_file: bool = False
+    is_deleted_file: bool = False
+
+
+# Models for detection results
+
+
+@dataclass
+class Trigger:
+    """A subscription that was triggered by changes."""
+
+    subscription_id: str
+    subscription: Subscription
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]  # e.g., ["overlap_hunk", "file_deleted", "insert_inside_range",
+    #                           "semantic_target_missing", "duplicate_found",
+    #                           "interface_changed", "body_changed"]
+    matching_hunks: list[Hunk]
+    change_type: str | None = None  # "STRUCTURAL"|"CONTENT"|"MISSING"|"AMBIGUOUS"|"PARSE_ERROR"
+    details: dict[str, Any] | None = None
+
+
+@dataclass
+class Proposal:
+    """A proposed update to a subscription (rename or line shift)."""
+
+    subscription_id: str
+    subscription: Subscription
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]  # ["rename", "line_shift", "semantic_location", "moved_cross_file"]
+    confidence: str = "high"  # "high"|"medium"|"low" based on match tier
+    shift: int | None = None
+    new_qualname: str | None = None  # For semantic subscriptions when construct renamed
+    new_kind: str | None = None  # For semantic subscriptions if kind changed
+
+
+@dataclass
+class ScanResult:
+    """Result of scanning for changes."""
+
+    base_ref: str
+    target_ref: str
+    triggers: list[Trigger]
+    proposals: list[Proposal]
+    unchanged: list[Subscription]  # Subscriptions with no changes or shifts
+
+
+# Models for multi-project management
+
+
+@dataclass
+class Project:
+    """A registered project (git repository with codesub initialized)."""
+
+    id: str
+    name: str  # Display name (defaults to repo directory name)
+    path: str  # Absolute path to the repository root
+    created_at: str = field(default_factory=_utc_now)
+    updated_at: str = field(default_factory=_utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "path": self.path,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Project":
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            path=data["path"],
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+        )
+
+    @classmethod
+    def create(cls, name: str, path: str) -> "Project":
+        """Create a new project with generated ID and timestamps."""
+        now = _utc_now()
+        return cls(
+            id=_generate_id(),
+            name=name,
+            path=path,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+@dataclass
+class ScanHistoryEntry:
+    """A persisted scan result."""
+
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+    scan_result: dict[str, Any]  # Full ScanResult as dict
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "base_ref": self.base_ref,
+            "target_ref": self.target_ref,
+            "trigger_count": self.trigger_count,
+            "proposal_count": self.proposal_count,
+            "unchanged_count": self.unchanged_count,
+            "created_at": self.created_at,
+            "scan_result": self.scan_result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScanHistoryEntry":
+        return cls(
+            id=data["id"],
+            project_id=data["project_id"],
+            base_ref=data["base_ref"],
+            target_ref=data["target_ref"],
+            trigger_count=data["trigger_count"],
+            proposal_count=data["proposal_count"],
+            unchanged_count=data["unchanged_count"],
+            created_at=data["created_at"],
+            scan_result=data["scan_result"],
+        )
+</file>
+
+<file path="src/codesub/cli.py">
+"""Command-line interface for codesub."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from . import __version__
+from .config_store import ConfigStore
+from .errors import CodesubError
+from .git_repo import GitRepo
+from .models import Anchor, SemanticTarget, Subscription
+from .utils import (
+    LineTarget,
+    SemanticTargetSpec,
+    extract_anchors,
+    format_subscription,
+    parse_target_spec,
+)
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Initialize codesub in the current repository."""
+    try:
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        # Resolve baseline ref
+        baseline = args.baseline or "HEAD"
+        baseline_hash = repo.resolve_ref(baseline)
+
+        config = store.init(baseline_hash, force=args.force)
+
+        print(f"Initialized codesub at {store.config_dir}")
+        print(f"Baseline: {baseline_hash[:12]} ({baseline})")
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    """Add a new subscription."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+        baseline = config.repo.baseline_ref
+
+        # Parse target specification
+        target = parse_target_spec(args.location)
+
+        if isinstance(target, SemanticTargetSpec):
+            # Semantic subscription
+            return _add_semantic_subscription(
+                store, repo, baseline, target, args
+            )
+        else:
+            # Line-based subscription
+            return _add_line_subscription(
+                store, repo, baseline, target, args
+            )
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def _add_line_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: LineTarget,
+    args: argparse.Namespace,
+) -> int:
+    """Add a line-based subscription."""
+    lines = repo.show_file(baseline, target.path)
+
+    # Validate line range
+    if target.end_line > len(lines):
+        print(
+            f"Error: Line range {target.start_line}-{target.end_line} exceeds "
+            f"file length ({len(lines)} lines)",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Extract anchors
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, target.start_line, target.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create subscription
+    sub = Subscription.create(
+        path=target.path,
+        start_line=target.start_line,
+        end_line=target.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+    )
+
+    store.add_subscription(sub)
+
+    location = (
+        f"{target.path}:{target.start_line}"
+        if target.start_line == target.end_line
+        else f"{target.path}:{target.start_line}-{target.end_line}"
+    )
+    print(f"Added subscription: {sub.id[:8]}")
+    print(f"  Location: {location}")
+    if args.label:
+        print(f"  Label: {args.label}")
+    print(f"  Watching {target.end_line - target.start_line + 1} line(s)")
+
+    return 0
+
+
+def _add_semantic_subscription(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    target: SemanticTargetSpec,
+    args: argparse.Namespace,
+) -> int:
+    """Add a semantic subscription."""
+    from .errors import UnsupportedLanguageError
+    from .semantic import get_indexer_for_path
+
+    try:
+        language, indexer = get_indexer_for_path(target.path)
+    except UnsupportedLanguageError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    lines = repo.show_file(baseline, target.path)
+    source = "\n".join(lines)
+
+    construct = indexer.find_construct(
+        source, target.path, target.qualname, target.kind
+    )
+    if construct is None:
+        print(f"Error: Construct '{target.qualname}' not found in {target.path}")
+        print("Use 'codesub symbols' to discover valid targets.")
+        return 1
+
+    # Extract anchors from construct lines
+    context_before, watched_lines, context_after = extract_anchors(
+        lines, construct.start_line, construct.end_line, context=args.context
+    )
+    anchors = Anchor(
+        context_before=context_before,
+        lines=watched_lines,
+        context_after=context_after,
+    )
+
+    # Create semantic target
+    semantic = SemanticTarget(
+        language=language,
+        kind=construct.kind,
+        qualname=construct.qualname,
+        role=construct.role,
+        interface_hash=construct.interface_hash,
+        body_hash=construct.body_hash,
+    )
+
+    sub = Subscription.create(
+        path=target.path,
+        start_line=construct.start_line,
+        end_line=construct.end_line,
+        label=args.label,
+        description=args.desc,
+        anchors=anchors,
+        semantic=semantic,
+        trigger_on_duplicate=getattr(args, 'trigger_on_duplicate', False),
+    )
+
+    store.add_subscription(sub)
+
+    print(f"Added semantic subscription: {sub.id[:8]}")
+    print(f"  Target: {construct.kind} {construct.qualname}")
+    print(f"  Location: {target.path}:{construct.start_line}-{construct.end_line}")
+    if args.label:
+        print(f"  Label: {args.label}")
+
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    """List all subscriptions."""
+    try:
+        store, _ = get_store_and_repo()
+        config = store.load()
+
+        subs = config.subscriptions
+        if not args.all:
+            subs = [s for s in subs if s.active]
+
+        if not subs:
+            print("No subscriptions found.")
+            return 0
+
+        if args.json:
+            data = [s.to_dict() for s in subs]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Subscriptions ({len(subs)}):")
+            print(f"Baseline: {config.repo.baseline_ref[:12]}")
+            print()
+            for sub in subs:
+                print(format_subscription(sub, verbose=args.verbose))
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    """Remove a subscription."""
+    try:
+        store, _ = get_store_and_repo()
+
+        sub = store.remove_subscription(args.subscription_id, hard=args.hard)
+
+        action = "Removed" if args.hard else "Deactivated"
+        print(f"{action} subscription: {sub.id[:8]}")
+        if sub.label:
+            print(f"  Label: {sub.label}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Scan for changes and report triggered subscriptions."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        # Import detector here to avoid circular imports during module load
+        from .detector import Detector
+
+        # Resolve refs
+        base_ref = args.base or config.repo.baseline_ref
+        target_ref = repo.resolve_ref(args.target or "HEAD")
+        base_ref = repo.resolve_ref(base_ref)
+
+        if base_ref == target_ref:
+            print("Base and target refs are the same. No changes to scan.")
+            return 0
+
+        # Run detection
+        detector = Detector(repo)
+        result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+        # Output results
+        if args.json:
+            from .update_doc import result_to_dict
+            data = result_to_dict(result)
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Scan: {base_ref[:12]} -> {target_ref[:12]}")
+            print()
+
+            if result.triggers:
+                print(f"TRIGGERED ({len(result.triggers)}):")
+                for trigger in result.triggers:
+                    sub = trigger.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    location = f"{trigger.path}:{trigger.start_line}-{trigger.end_line}"
+                    reasons = ", ".join(trigger.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    Location: {location}")
+                    print(f"    Reason: {reasons}")
+                print()
+
+            if result.proposals:
+                print(f"PROPOSED UPDATES ({len(result.proposals)}):")
+                for prop in result.proposals:
+                    sub = prop.subscription
+                    label = f" [{sub.label}]" if sub.label else ""
+                    old_loc = f"{prop.old_path}:{prop.old_start}-{prop.old_end}"
+                    new_loc = f"{prop.new_path}:{prop.new_start}-{prop.new_end}"
+                    reasons = ", ".join(prop.reasons)
+                    print(f"  {sub.id[:8]}{label}")
+                    print(f"    {old_loc} -> {new_loc}")
+                    print(f"    Reason: {reasons}")
+                    if prop.shift:
+                        print(f"    Shift: {prop.shift:+d}")
+                print()
+
+            if result.unchanged:
+                print(f"UNCHANGED ({len(result.unchanged)}):")
+                for sub in result.unchanged:
+                    label = f" [{sub.label}]" if sub.label else ""
+                    print(f"  {sub.id[:8]}{label}")
+                print()
+
+        # Write update documents if requested
+        if args.write_updates:
+            from .update_doc import write_update_doc
+            write_update_doc(result, args.write_updates)
+            print(f"Wrote update document: {args.write_updates}")
+
+        if args.write_md:
+            from .update_doc import write_markdown_doc
+            write_markdown_doc(result, args.write_md)
+            print(f"Wrote markdown summary: {args.write_md}")
+
+        # Exit code
+        if args.fail_on_trigger and result.triggers:
+            return 2
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_apply_updates(args: argparse.Namespace) -> int:
+    """Apply update proposals from an update document."""
+    try:
+        store, repo = get_store_and_repo()
+
+        from .updater import Updater
+
+        updater = Updater(store, repo)
+
+        # Load update document
+        with open(args.update_doc, "r", encoding="utf-8") as f:
+            update_data = json.load(f)
+
+        if args.dry_run:
+            print("Dry run - no changes will be made")
+            print()
+
+        applied, warnings = updater.apply(update_data, dry_run=args.dry_run)
+
+        if warnings:
+            print("Warnings:")
+            for warning in warnings:
+                print(f"  {warning}")
+            print()
+
+        if applied:
+            print(f"Applied {len(applied)} update(s):")
+            for sub_id in applied:
+                print(f"  {sub_id[:8]}")
+        else:
+            print("No updates applied.")
+
+        if not args.dry_run and applied:
+            target_ref = update_data.get("target_ref", "")
+            print(f"\nBaseline updated to: {target_ref[:12]}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"Error: Update document not found: {args.update_doc}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in update document: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_list(args: argparse.Namespace) -> int:
+    """List registered projects."""
+    try:
+        store = ProjectStore()
+        projects = store.list_projects()
+
+        if not projects:
+            print("No projects registered.")
+            print("Add a project with: codesub projects add <path>")
+            return 0
+
+        if args.json:
+            data = [p.to_dict() for p in projects]
+            print(json.dumps(data, indent=2))
+        else:
+            print(f"Projects ({len(projects)}):")
+            print()
+            for p in projects:
+                print(f"  {p.id[:8]}  {p.name}")
+                print(f"           {p.path}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_add(args: argparse.Namespace) -> int:
+    """Add a project."""
+    try:
+        store = ProjectStore()
+        project = store.add_project(path=args.path, name=args.name)
+
+        print(f"Added project: {project.id[:8]}")
+        print(f"  Name: {project.name}")
+        print(f"  Path: {project.path}")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_projects_remove(args: argparse.Namespace) -> int:
+    """Remove a project."""
+    try:
+        store = ProjectStore()
+        project = store.remove_project(args.project_id)
+
+        print(f"Removed project: {project.id[:8]} ({project.name})")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_scan_history_clear(args: argparse.Namespace) -> int:
+    """Clear scan history."""
+    try:
+        history = ScanHistory()
+
+        if args.project:
+            count = history.clear_project_history(args.project)
+            print(f"Cleared {count} scan(s) for project {args.project[:8]}")
+        else:
+            count = history.clear_all_history()
+            print(f"Cleared {count} scan(s) from all projects")
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_symbols(args: argparse.Namespace) -> int:
+    """List discoverable code constructs in a file."""
+    try:
+        store, repo = get_store_and_repo()
+        config = store.load()
+
+        ref = args.ref or config.repo.baseline_ref
+        lines = repo.show_file(ref, args.path)
+        source = "\n".join(lines)
+
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer_for_path
+
+        try:
+            _, indexer = get_indexer_for_path(args.path)
+        except UnsupportedLanguageError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+        constructs = indexer.index_file(source, args.path)
+
+        # Filter by kind if specified
+        if args.kind:
+            constructs = [c for c in constructs if c.kind == args.kind]
+
+        # Filter by grep pattern if specified
+        if args.grep:
+            constructs = [c for c in constructs if args.grep in c.qualname]
+
+        if args.json:
+            data = [
+                {
+                    "path": c.path,
+                    "kind": c.kind,
+                    "qualname": c.qualname,
+                    "start_line": c.start_line,
+                    "end_line": c.end_line,
+                    "role": c.role,
+                }
+                for c in constructs
+            ]
+            print(json.dumps(data, indent=2))
+        else:
+            if not constructs:
+                print(f"No constructs found in {args.path}")
+                return 0
+
+            print(f"Constructs in {args.path} ({len(constructs)}):")
+            print()
+            for c in constructs:
+                fqn = f"{c.path}::{c.qualname}"
+                role_str = f" ({c.role})" if c.role else ""
+                lines_str = (
+                    f"{c.start_line}"
+                    if c.start_line == c.end_line
+                    else f"{c.start_line}-{c.end_line}"
+                )
+                print(f"  {c.kind:<10} {c.qualname}{role_str}")
+                print(f"             Lines: {lines_str}")
+                print(f"             FQN:   {fqn}")
+                print()
+
+        return 0
+
+    except CodesubError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Start the API server."""
+    try:
+        import uvicorn
+
+        # Verify we're in a git repo
+        repo = GitRepo()
+        store = ConfigStore(repo.root)
+
+        if not store.exists():
+            print("Warning: codesub not initialized. Run 'codesub init' first.", file=sys.stderr)
+            print("Starting server anyway...", file=sys.stderr)
+
+        print("Starting codesub API server...")
+        print(f"Repository: {repo.root}")
+        print(f"API docs: http://{args.host}:{args.port}/docs")
+        print()
+
+        # When reload is enabled, uvicorn requires the app as an import string
+        app_target = "codesub.api:app" if args.reload else None
+        if app_target is None:
+            from .api import app
+            app_target = app
+
+        uvicorn.run(
+            app_target,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+            workers=1,  # Single worker to avoid concurrent write issues
+        )
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="codesub",
+        description="Subscribe to file line ranges and detect changes via git diff.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # init
+    init_parser = subparsers.add_parser("init", help="Initialize codesub in the repository")
+    init_parser.add_argument(
+        "--baseline", "-b", help="Baseline ref (default: HEAD)"
+    )
+    init_parser.add_argument(
+        "--force", "-f", action="store_true", help="Overwrite existing config"
+    )
+
+    # add
+    add_parser = subparsers.add_parser("add", help="Add a new subscription")
+    add_parser.add_argument(
+        "location",
+        help="Location to subscribe to. Line-based: 'path:line' or 'path:start-end'. "
+        "Semantic: 'path::QualName' or 'path::kind:QualName'",
+    )
+    add_parser.add_argument("--label", "-l", help="Label for the subscription")
+    add_parser.add_argument("--desc", "-d", help="Description")
+    add_parser.add_argument(
+        "--context", "-c", type=int, default=2,
+        help="Number of context lines for anchors (default: 2)"
+    )
+    add_parser.add_argument(
+        "--trigger-on-duplicate",
+        action="store_true",
+        help="Trigger alert if construct is found in multiple files (default: no trigger)"
+    )
+
+    # list
+    list_parser = subparsers.add_parser("list", help="List subscriptions")
+    list_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    list_parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show detailed info including anchors"
+    )
+    list_parser.add_argument(
+        "--all", "-a", action="store_true", help="Include inactive subscriptions"
+    )
+
+    # remove
+    remove_parser = subparsers.add_parser("remove", help="Remove a subscription")
+    remove_parser.add_argument("subscription_id", help="Subscription ID (or prefix)")
+    remove_parser.add_argument(
+        "--hard", action="store_true", help="Delete entirely (default: deactivate)"
+    )
+
+    # symbols
+    symbols_parser = subparsers.add_parser(
+        "symbols", help="List discoverable code constructs in a file"
+    )
+    symbols_parser.add_argument("path", help="File path to analyze")
+    symbols_parser.add_argument("--ref", help="Git ref (default: baseline)")
+    symbols_parser.add_argument(
+        "--kind",
+        choices=["variable", "field", "method", "class", "interface", "enum"],
+        help="Filter by construct kind",
+    )
+    symbols_parser.add_argument("--grep", help="Filter by name pattern")
+    symbols_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # scan
+    scan_parser = subparsers.add_parser(
+        "scan", help="Scan for changes and report triggered subscriptions"
+    )
+    scan_parser.add_argument(
+        "--base", "-b", help="Base ref (default: config baseline)"
+    )
+    scan_parser.add_argument(
+        "--target", "-t", help="Target ref (default: HEAD)"
+    )
+    scan_parser.add_argument(
+        "--write-updates", "-w", help="Write JSON update document to path"
+    )
+    scan_parser.add_argument(
+        "--write-md", "-m", help="Write markdown summary to path"
+    )
+    scan_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    scan_parser.add_argument(
+        "--fail-on-trigger", action="store_true",
+        help="Exit with code 2 if any subscriptions are triggered"
+    )
+
+    # apply-updates
+    apply_parser = subparsers.add_parser(
+        "apply-updates", help="Apply update proposals from an update document"
+    )
+    apply_parser.add_argument("update_doc", help="Path to update document JSON")
+    apply_parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be done without applying"
+    )
+
+    # serve
+    serve_parser = subparsers.add_parser("serve", help="Start the API server")
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument(
+        "--port", "-p", type=int, default=8000, help="Port to bind to (default: 8000)"
+    )
+    serve_parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload for development"
+    )
+
+    # projects (subcommand group)
+    projects_parser = subparsers.add_parser("projects", help="Manage registered projects")
+    projects_subparsers = projects_parser.add_subparsers(dest="projects_command")
+
+    # projects list
+    projects_list_parser = projects_subparsers.add_parser("list", help="List registered projects")
+    projects_list_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # projects add
+    projects_add_parser = projects_subparsers.add_parser("add", help="Add a project")
+    projects_add_parser.add_argument("path", help="Path to git repository")
+    projects_add_parser.add_argument("--name", "-n", help="Display name (defaults to dir name)")
+
+    # projects remove
+    projects_remove_parser = projects_subparsers.add_parser("remove", help="Remove a project")
+    projects_remove_parser.add_argument("project_id", help="Project ID")
+
+    # scan-history
+    scan_history_parser = subparsers.add_parser("scan-history", help="Manage scan history")
+    scan_history_subparsers = scan_history_parser.add_subparsers(dest="scan_history_command")
+
+    # scan-history clear
+    scan_history_clear_parser = scan_history_subparsers.add_parser("clear", help="Clear scan history")
+    scan_history_clear_parser.add_argument(
+        "--project", "-p", help="Clear only for specific project ID"
+    )
+
+    return parser
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = create_parser()
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return 0
+
+    # Handle projects subcommands
+    if args.command == "projects":
+        if not hasattr(args, "projects_command") or not args.projects_command:
+            parser.parse_args(["projects", "--help"])
+            return 0
+        if args.projects_command == "list":
+            return cmd_projects_list(args)
+        elif args.projects_command == "add":
+            return cmd_projects_add(args)
+        elif args.projects_command == "remove":
+            return cmd_projects_remove(args)
+
+    # Handle scan-history subcommands
+    if args.command == "scan-history":
+        if not hasattr(args, "scan_history_command") or not args.scan_history_command:
+            parser.parse_args(["scan-history", "--help"])
+            return 0
+        if args.scan_history_command == "clear":
+            return cmd_scan_history_clear(args)
+
+    commands = {
+        "init": cmd_init,
+        "add": cmd_add,
+        "list": cmd_list,
+        "remove": cmd_remove,
+        "symbols": cmd_symbols,
+        "scan": cmd_scan,
+        "apply-updates": cmd_apply_updates,
+        "serve": cmd_serve,
+    }
+
+    cmd_func = commands.get(args.command)
+    if cmd_func:
+        return cmd_func(args)
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+</file>
+
+<file path="src/codesub/api.py">
+"""FastAPI REST API for codesub subscription management."""
+
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from .config_store import ConfigStore
+from .errors import (
+    CodesubError,
+    ConfigNotFoundError,
+    SubscriptionNotFoundError,
+    InvalidLocationError,
+    InvalidLineRangeError,
+    FileNotFoundAtRefError,
+    InvalidSchemaVersionError,
+    NotAGitRepoError,
+    GitError,
+    ProjectNotFoundError,
+    InvalidProjectPathError,
+    ScanNotFoundError,
+    UnsupportedLanguageError,
+)
+from .git_repo import GitRepo
+from .models import Anchor, Subscription, SemanticTarget
+from .utils import parse_location, extract_anchors, parse_target_spec, LineTarget, SemanticTargetSpec
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+from .detector import Detector
+from .updater import Updater
+from .update_doc import result_to_dict
+
+
+# --- Pydantic Schemas ---
+
+
+class AnchorSchema(BaseModel):
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+
+class SemanticTargetSchema(BaseModel):
+    """Schema for semantic subscription target."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"
+    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add"
+    role: Optional[str] = None  # "const" for constants, None otherwise
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+
+
+class SubscriptionSchema(BaseModel):
+    id: str
+    path: str
+    start_line: int
+    end_line: int
+    label: Optional[str] = None
+    description: Optional[str] = None
+    anchors: Optional[AnchorSchema] = None
+    semantic: Optional[SemanticTargetSchema] = None
+    active: bool = True
+    trigger_on_duplicate: bool = False
+    created_at: str
+    updated_at: str
+
+
+class SubscriptionCreateRequest(BaseModel):
+    """Request body for creating a subscription."""
+
+    location: str = Field(
+        ...,
+        description="Location format: 'path:line' or 'path:start-end' for line-based, "
+        "'path::QualName' or 'path::kind:QualName' for semantic",
+    )
+    label: Optional[str] = None
+    description: Optional[str] = None
+    context: int = Field(default=2, ge=0, le=10)
+    trigger_on_duplicate: bool = Field(
+        default=False,
+        description="For semantic subscriptions: trigger alert if construct found in multiple files"
+    )
+
+
+class SubscriptionUpdateRequest(BaseModel):
+    """Request body for updating a subscription."""
+
+    label: Optional[str] = None
+    description: Optional[str] = None
+    trigger_on_duplicate: Optional[bool] = None
+
+
+class SubscriptionListResponse(BaseModel):
+    subscriptions: list[SubscriptionSchema]
+    count: int
+    baseline_ref: str
+    baseline_title: str = ""
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_type: str
+
+
+# --- Project Schemas ---
+
+
+class ProjectSchema(BaseModel):
+    id: str
+    name: str
+    path: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectCreateRequest(BaseModel):
+    path: str = Field(..., description="Absolute path to git repository")
+    name: Optional[str] = Field(None, description="Display name (defaults to dir name)")
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(..., description="New display name")
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectSchema]
+    count: int
+
+
+class ProjectStatusResponse(BaseModel):
+    project: ProjectSchema
+    path_exists: bool
+    codesub_initialized: bool
+    subscription_count: int
+    baseline_ref: Optional[str]
+
+
+# --- Scan Schemas ---
+
+
+class ScanRequest(BaseModel):
+    base_ref: str = Field(..., description="Base git ref (e.g., 'HEAD~1', 'baseline', commit hash)")
+    target_ref: Optional[str] = Field(default="HEAD", description="Target git ref ('HEAD', commit hash), or empty/null for working directory")
+
+
+class TriggerSchema(BaseModel):
+    subscription_id: str
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]
+    label: Optional[str]
+    change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
+    details: Optional[dict] = None  # Additional details for semantic triggers
+
+
+class ProposalSchema(BaseModel):
+    subscription_id: str
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]
+    confidence: str
+    shift: Optional[int]
+    label: Optional[str]
+    new_qualname: Optional[str] = None  # For semantic subscriptions when construct renamed
+    new_kind: Optional[str] = None  # For semantic subscriptions if kind changed
+
+
+class ScanResultSchema(BaseModel):
+    base_ref: str
+    target_ref: str
+    triggers: list[TriggerSchema]
+    proposals: list[ProposalSchema]
+    unchanged_count: int
+
+
+class ScanHistoryEntrySchema(BaseModel):
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+
+
+class ScanHistoryListResponse(BaseModel):
+    scans: list[ScanHistoryEntrySchema]
+    count: int
+
+
+class ApplyUpdatesRequest(BaseModel):
+    scan_id: str = Field(..., description="Scan ID to apply proposals from")
+    proposal_ids: Optional[list[str]] = Field(
+        None,
+        description="Specific proposal IDs to apply (all if not specified)"
+    )
+
+
+class ApplyUpdatesResponse(BaseModel):
+    applied: list[str]
+    warnings: list[str]
+    new_baseline: Optional[str]
+
+
+# --- Filesystem Browser Schemas ---
+
+
+class FilesystemEntry(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+
+
+class FilesystemBrowseResponse(BaseModel):
+    current_path: str
+    parent_path: Optional[str]
+    entries: list[FilesystemEntry]
+
+
+# --- Helper Functions ---
+
+
+def get_project_store() -> ProjectStore:
+    """Get the global ProjectStore."""
+    return ProjectStore()
+
+
+def get_scan_history() -> ScanHistory:
+    """Get the global ScanHistory."""
+    return ScanHistory()
+
+
+def get_project_store_and_repo(project_id: str) -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for a specific project."""
+    project_store = get_project_store()
+    project = project_store.get_project(project_id)
+
+    repo = GitRepo(project.path)
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
+    """Convert dataclass Subscription to Pydantic schema."""
+    anchors = None
+    if sub.anchors:
+        anchors = AnchorSchema(
+            context_before=sub.anchors.context_before,
+            lines=sub.anchors.lines,
+            context_after=sub.anchors.context_after,
+        )
+    semantic = None
+    if sub.semantic:
+        semantic = SemanticTargetSchema(
+            language=sub.semantic.language,
+            kind=sub.semantic.kind,
+            qualname=sub.semantic.qualname,
+            role=sub.semantic.role,
+            interface_hash=sub.semantic.interface_hash,
+            body_hash=sub.semantic.body_hash,
+            fingerprint_version=sub.semantic.fingerprint_version,
+        )
+    return SubscriptionSchema(
+        id=sub.id,
+        path=sub.path,
+        start_line=sub.start_line,
+        end_line=sub.end_line,
+        label=sub.label,
+        description=sub.description,
+        anchors=anchors,
+        semantic=semantic,
+        active=sub.active,
+        trigger_on_duplicate=sub.trigger_on_duplicate,
+        created_at=sub.created_at,
+        updated_at=sub.updated_at,
+    )
+
+
+def _create_subscription_from_request(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    request: SubscriptionCreateRequest,
+) -> Subscription:
+    """Create a subscription from a request, handling both line-based and semantic targets."""
+    from .semantic import get_indexer_for_path
+
+    target = parse_target_spec(request.location)
+
+    if isinstance(target, SemanticTargetSpec):
+        # Semantic subscription
+        lines = repo.show_file(baseline, target.path)
+        source = "\n".join(lines)
+
+        language, indexer = get_indexer_for_path(target.path)
+        construct = indexer.find_construct(
+            source, target.path, target.qualname, target.kind
+        )
+        if construct is None:
+            raise InvalidLocationError(
+                request.location,
+                f"Construct '{target.qualname}' not found. Use 'codesub symbols' to discover valid targets.",
+            )
+
+        # Extract anchors from construct lines
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, construct.start_line, construct.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        # Create semantic target
+        semantic = SemanticTarget(
+            language=language,
+            kind=construct.kind,
+            qualname=construct.qualname,
+            role=construct.role,
+            interface_hash=construct.interface_hash,
+            body_hash=construct.body_hash,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=construct.start_line,
+            end_line=construct.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+            semantic=semantic,
+            trigger_on_duplicate=request.trigger_on_duplicate,
+        )
+    else:
+        # Line-based subscription
+        lines = repo.show_file(baseline, target.path)
+
+        # Validate line range
+        if target.end_line > len(lines):
+            raise InvalidLineRangeError(
+                target.start_line,
+                target.end_line,
+                f"exceeds file length ({len(lines)} lines)",
+            )
+
+        # Extract anchors
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, target.start_line, target.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=target.start_line,
+            end_line=target.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+        )
+
+
+# --- FastAPI App ---
+
+
+app = FastAPI(
+    title="codesub API",
+    description="REST API for managing code subscriptions",
+    version="0.1.0",
+)
+
+# CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Global Exception Handler ---
+
+
+# Map exception types to HTTP status codes
+ERROR_STATUS_CODES: dict[type, int] = {
+    ConfigNotFoundError: 409,
+    SubscriptionNotFoundError: 404,
+    InvalidLocationError: 400,
+    InvalidLineRangeError: 400,
+    FileNotFoundAtRefError: 404,
+    InvalidSchemaVersionError: 500,
+    NotAGitRepoError: 500,
+    GitError: 500,
+    ProjectNotFoundError: 404,
+    InvalidProjectPathError: 400,
+    ScanNotFoundError: 404,
+    UnsupportedLanguageError: 400,
+}
+
+
+@app.exception_handler(CodesubError)
+async def codesub_error_handler(request: Request, exc: CodesubError) -> JSONResponse:
+    """Map CodesubError subclasses to appropriate HTTP responses."""
+    status_code = ERROR_STATUS_CODES.get(type(exc), 500)
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": str(exc), "error_type": type(exc).__name__},
+    )
+
+
+# --- Endpoints ---
+
+
+@app.get("/api/subscriptions", response_model=SubscriptionListResponse)
+def list_subscriptions(include_inactive: bool = Query(default=False)):
+    """List all subscriptions, optionally including inactive ones."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.get("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_subscription(sub_id: str):
+    """Get a single subscription by ID (supports partial ID matching)."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_subscription(request: SubscriptionCreateRequest):
+    """Create a new subscription (line-based or semantic)."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description.
+
+    PATCH semantics:
+    - Omitted field: keep existing value
+    - Empty string "": clear to null
+    - Explicit null: clear to null
+    """
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    # Get the fields that were actually sent in the request
+    update_data = request.model_dump(exclude_unset=True)
+
+    # Update fields if provided
+    if "label" in update_data:
+        # Empty string becomes None
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        # Empty string becomes None
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_subscription(sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_subscription(sub_id: str):
+    """Reactivate a deactivated subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint. Always returns 200."""
+    try:
+        store, repo = get_store_and_repo()
+        config_exists = store.exists()
+        baseline_ref = None
+        if config_exists:
+            config = store.load()
+            baseline_ref = config.repo.baseline_ref
+        return {
+            "status": "ok",
+            "config_initialized": config_exists,
+            "repo_root": str(repo.root),
+            "baseline_ref": baseline_ref,
+        }
+    except NotAGitRepoError:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": "Not running in a git repository",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": str(e),
+        }
+
+
+# --- Project Endpoints ---
+
+
+@app.get("/api/projects", response_model=ProjectListResponse)
+def list_projects():
+    """List all registered projects."""
+    store = get_project_store()
+    projects = store.list_projects()
+    return ProjectListResponse(
+        projects=[ProjectSchema(**p.to_dict()) for p in projects],
+        count=len(projects),
+    )
+
+
+@app.post("/api/projects", response_model=ProjectSchema, status_code=201)
+def create_project(request: ProjectCreateRequest):
+    """Register a new project."""
+    store = get_project_store()
+    project = store.add_project(path=request.path, name=request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
+def get_project_status(project_id: str):
+    """Get project details and status."""
+    store = get_project_store()
+    status = store.get_project_status(project_id)
+    return ProjectStatusResponse(
+        project=ProjectSchema(**status["project"]),
+        path_exists=status["path_exists"],
+        codesub_initialized=status["codesub_initialized"],
+        subscription_count=status["subscription_count"],
+        baseline_ref=status["baseline_ref"],
+    )
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectSchema)
+def update_project(project_id: str, request: ProjectUpdateRequest):
+    """Update project name."""
+    store = get_project_store()
+    project = store.update_project(project_id, request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.delete("/api/projects/{project_id}", response_model=ProjectSchema)
+def delete_project(project_id: str):
+    """Remove a project from the registry."""
+    store = get_project_store()
+    project = store.remove_project(project_id)
+    return ProjectSchema(**project.to_dict())
+
+
+# --- Project Subscriptions Endpoints ---
+
+
+@app.get("/api/projects/{project_id}/subscriptions", response_model=SubscriptionListResponse)
+def list_project_subscriptions(
+    project_id: str,
+    include_inactive: bool = Query(default=False)
+):
+    """List subscriptions for a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
+    """Create a new subscription in a specific project (line-based or semantic)."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_project_subscription(project_id: str, sub_id: str):
+    """Get a single subscription by ID within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_project_subscription(project_id: str, sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    update_data = request.model_dump(exclude_unset=True)
+
+    if "label" in update_data:
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_project_subscription(project_id: str, sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/projects/{project_id}/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_project_subscription(project_id: str, sub_id: str):
+    """Reactivate a deactivated subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+# --- Scan Endpoints ---
+
+
+@app.post("/api/projects/{project_id}/scan", response_model=ScanHistoryEntrySchema)
+def run_project_scan(project_id: str, request: ScanRequest):
+    """
+    Run a scan for a project and save to history.
+
+    Special ref values:
+    - "baseline": Use project's configured baseline ref
+    - "HEAD~N": N commits back from HEAD
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Resolve refs
+    base_ref = request.base_ref
+    target_ref = request.target_ref
+
+    # Handle special values
+    if base_ref == "baseline":
+        base_ref = config.repo.baseline_ref
+
+    # Resolve to commit hashes (empty target_ref means working directory)
+    base_ref = repo.resolve_ref(base_ref)
+    if target_ref:
+        target_ref = repo.resolve_ref(target_ref)
+    else:
+        target_ref = None  # Working directory
+
+    # Run scan
+    detector = Detector(repo)
+    result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+    # Convert to dict and save to history
+    result_dict = result_to_dict(result)
+    history = get_scan_history()
+    entry = history.save_scan(project_id, result_dict)
+
+    return ScanHistoryEntrySchema(
+        id=entry.id,
+        project_id=entry.project_id,
+        base_ref=entry.base_ref,
+        target_ref=entry.target_ref,
+        trigger_count=entry.trigger_count,
+        proposal_count=entry.proposal_count,
+        unchanged_count=entry.unchanged_count,
+        created_at=entry.created_at,
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history", response_model=ScanHistoryListResponse)
+def list_scan_history(
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100)
+):
+    """List scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entries = history.list_scans(project_id, limit=limit)
+
+    return ScanHistoryListResponse(
+        scans=[
+            ScanHistoryEntrySchema(
+                id=e.id,
+                project_id=e.project_id,
+                base_ref=e.base_ref,
+                target_ref=e.target_ref,
+                trigger_count=e.trigger_count,
+                proposal_count=e.proposal_count,
+                unchanged_count=e.unchanged_count,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ],
+        count=len(entries),
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history/{scan_id}")
+def get_scan_result(project_id: str, scan_id: str):
+    """Get a specific scan result with full details."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entry = history.get_scan(project_id, scan_id)
+
+    return entry.to_dict()
+
+
+@app.delete("/api/projects/{project_id}/scan-history")
+def clear_project_scan_history(project_id: str):
+    """Clear all scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    count = history.clear_project_history(project_id)
+
+    return {"deleted": count}
+
+
+@app.delete("/api/scan-history")
+def clear_all_scan_history():
+    """Clear all scan history for all projects."""
+    history = get_scan_history()
+    count = history.clear_all_history()
+
+    return {"deleted": count}
+
+
+# --- Apply Updates Endpoint ---
+
+
+@app.post("/api/projects/{project_id}/apply-updates", response_model=ApplyUpdatesResponse)
+def apply_project_updates(project_id: str, request: ApplyUpdatesRequest):
+    """
+    Apply proposals from a scan result.
+
+    Updates subscriptions and advances baseline to the scan's target_ref.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+
+    # Get the scan result
+    history = get_scan_history()
+    entry = history.get_scan(project_id, request.scan_id)
+    scan_result = entry.scan_result
+
+    # Filter proposals if specific IDs requested
+    proposals = scan_result.get("proposals", [])
+    if request.proposal_ids:
+        proposals = [p for p in proposals if p["subscription_id"] in request.proposal_ids]
+
+    # Build update document format
+    update_data = {
+        "target_ref": scan_result.get("target_ref", ""),
+        "proposals": proposals,
+    }
+
+    # Apply updates
+    updater = Updater(store, repo)
+    applied, warnings = updater.apply(update_data)
+
+    return ApplyUpdatesResponse(
+        applied=applied,
+        warnings=warnings,
+        new_baseline=scan_result.get("target_ref") if applied else None,
+    )
+
+
+# --- Filesystem Browser Endpoint ---
+
+
+@app.get("/api/filesystem/browse", response_model=FilesystemBrowseResponse)
+def browse_filesystem(path: str = Query(default="~", description="Path to browse")):
+    """
+    Browse filesystem directories.
+
+    Used by the frontend to provide a file picker for selecting project paths.
+    Returns directories (not files) sorted alphabetically, with hidden dirs excluded.
+    Restricted to user's home directory for security.
+    """
+    home = Path.home().resolve()
+
+    # Expand ~ and resolve path
+    try:
+        expanded = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}")
+
+    # Security: restrict to home directory
+    try:
+        expanded.relative_to(home)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access restricted to home directory ({home})"
+        )
+
+    if not expanded.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    if not expanded.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+    # Get parent path (None if at home directory)
+    if expanded == home:
+        parent_path = None
+    else:
+        parent = expanded.parent
+        # Ensure parent is still within home
+        try:
+            parent.relative_to(home)
+            parent_path = str(parent)
+        except ValueError:
+            parent_path = None
+
+    # List directory entries (directories only, exclude hidden)
+    entries: list[FilesystemEntry] = []
+    try:
+        for item in sorted(expanded.iterdir(), key=lambda p: p.name.lower()):
+            try:
+                # Skip hidden directories
+                if item.name.startswith("."):
+                    continue
+                # Skip symlinks to avoid escaping home directory
+                if item.is_symlink():
+                    continue
+                if item.is_dir():
+                    entries.append(
+                        FilesystemEntry(
+                            name=item.name,
+                            path=str(item),
+                            is_dir=True,
+                        )
+                    )
+            except OSError:
+                # Skip entries that can't be inspected (broken symlinks, etc.)
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+
+    return FilesystemBrowseResponse(
+        current_path=str(expanded),
+        parent_path=parent_path,
+        entries=entries,
+    )
+</file>
+
+</files>
