@@ -5,7 +5,7 @@ import { getProjectFileContent, getProjectFileSymbols } from '../api';
 
 // Construct kinds that can be tracked as subscriptions
 // Includes both member kinds and container kinds (class/enum/interface)
-const TRACKABLE_KINDS = new Set(['variable', 'field', 'method', 'class', 'interface', 'enum']);
+const TRACKABLE_KINDS = new Set(['variable', 'field', 'function', 'method', 'class', 'interface', 'enum']);
 
 interface Props {
   projectId: string;

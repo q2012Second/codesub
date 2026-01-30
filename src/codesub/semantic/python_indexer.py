@@ -31,6 +31,11 @@ class PythonIndexer:
             self._extract_module_assignments(tree.root_node, source_bytes, path, has_errors)
         )
 
+        # Extract module-level functions
+        constructs.extend(
+            self._extract_module_functions(tree.root_node, source_bytes, path, has_errors)
+        )
+
         # Extract classes with their fields and methods
         constructs.extend(
             self._extract_classes(tree.root_node, source_bytes, path, has_errors)
@@ -74,6 +79,39 @@ class PythonIndexer:
                     )
                     if construct:
                         constructs.append(construct)
+
+        return constructs
+
+    def _extract_module_functions(
+        self,
+        root: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+    ) -> list[Construct]:
+        """Extract module-level function definitions."""
+        constructs: list[Construct] = []
+
+        for child in root.children:
+            func_node = None
+            decorated_node = None
+
+            if child.type == "function_definition":
+                func_node = child
+            elif child.type == "decorated_definition":
+                # Find the function_definition inside the decorated_definition
+                for inner in child.children:
+                    if inner.type == "function_definition":
+                        func_node = inner
+                        decorated_node = child
+                        break
+
+            if func_node is not None:
+                construct = self._parse_callable(
+                    func_node, source_bytes, path, has_errors, decorated_node
+                )
+                if construct:
+                    constructs.append(construct)
 
         return constructs
 
@@ -153,8 +191,8 @@ class PythonIndexer:
 
             # Method: def name(...): ...
             elif member.type == "function_definition":
-                construct = self._parse_method(
-                    member, source_bytes, path, class_name, has_errors
+                construct = self._parse_callable(
+                    member, source_bytes, path, has_errors, class_name=class_name
                 )
                 if construct:
                     constructs.append(construct)
@@ -172,13 +210,13 @@ class PythonIndexer:
                         break
 
                 if func:
-                    construct = self._parse_method(
+                    construct = self._parse_callable(
                         func,
                         source_bytes,
                         path,
-                        class_name,
                         has_errors,
                         decorated_node=member,
+                        class_name=class_name,
                     )
                     if construct:
                         constructs.append(construct)
@@ -289,35 +327,47 @@ class PythonIndexer:
             has_parse_error=has_errors,
         )
 
-    def _parse_method(
+    def _parse_callable(
         self,
         node: tree_sitter.Node,
         source_bytes: bytes,
         path: str,
-        class_name: str,
         has_errors: bool,
         decorated_node: tree_sitter.Node | None = None,
+        class_name: str | None = None,
     ) -> Construct | None:
-        """Parse method definition."""
+        """Parse function or method definition.
+
+        Args:
+            class_name: If provided, treats as method with qualified name.
+                       If None, treats as module-level function.
+        """
         name = self._get_name(node)
         if not name:
             return None
 
-        qualname = f"{class_name}.{name}"
+        if class_name:
+            qualname = f"{class_name}.{name}"
+            kind = "method"
+        else:
+            qualname = name
+            kind = "function"
 
         # Get decorators
         decorators: list[str] = []
         if decorated_node:
-            for child in decorated_node.children:
-                if child.type == "decorator":
-                    decorators.append(self._node_text(child, source_bytes))
+            decorators = [
+                self._node_text(child, source_bytes)
+                for child in decorated_node.children
+                if child.type == "decorator"
+            ]
 
         # Get parameters for interface_hash
         params_node = node.child_by_field_name("parameters")
         return_type = node.child_by_field_name("return_type")
 
         interface_hash = compute_interface_hash(
-            "method",
+            kind,
             annotation=self._node_text(return_type, source_bytes) if return_type else None,
             decorators=decorators,
             params_node=params_node,
@@ -331,7 +381,7 @@ class PythonIndexer:
         use_node = decorated_node or node
         return Construct(
             path=path,
-            kind="method",
+            kind=kind,
             qualname=qualname,
             role=None,
             start_line=use_node.start_point[0] + 1,

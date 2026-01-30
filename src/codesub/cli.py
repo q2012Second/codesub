@@ -703,7 +703,7 @@ def create_parser() -> argparse.ArgumentParser:
     symbols_parser.add_argument("--ref", help="Git ref (default: baseline)")
     symbols_parser.add_argument(
         "--kind",
-        choices=["variable", "field", "method", "class", "interface", "enum"],
+        choices=["variable", "field", "method", "function", "class", "interface", "enum"],
         help="Filter by construct kind",
     )
     symbols_parser.add_argument("--grep", help="Filter by name pattern")

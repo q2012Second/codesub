@@ -218,11 +218,11 @@ class TestGetFileSymbols:
             assert "target" in c
 
         # Check specific constructs
-        # Note: Python indexer returns module-level variables and class methods
         qualnames = [c["qualname"] for c in data["constructs"]]
         assert "API_VERSION" in qualnames
         assert "User.__init__" in qualnames
         assert "User.greet" in qualnames
+        assert "helper_function" in qualnames  # Module-level function
 
     def test_get_symbols_filter_by_kind(self, project_with_python):
         """Filters constructs by kind."""

@@ -52,7 +52,7 @@ def parse_target_spec(spec: str) -> LineTarget | SemanticTargetSpec:
         qualname = rest
         if ":" in rest and not rest.startswith(":"):
             maybe_kind, maybe_qualname = rest.split(":", 1)
-            if maybe_kind in ("variable", "field", "method", "class", "interface", "enum"):
+            if maybe_kind in ("variable", "field", "method", "function", "class", "interface", "enum"):
                 kind = maybe_kind
                 qualname = maybe_qualname
 

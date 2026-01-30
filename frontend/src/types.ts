@@ -12,7 +12,7 @@ export interface MemberFingerprint {
 
 export interface SemanticTarget {
   language: string; // "python" | "java"
-  kind: string; // "variable" | "field" | "method" | "class" | "interface" | "enum"
+  kind: string; // "variable" | "field" | "function" | "method" | "class" | "interface" | "enum"
   qualname: string; // "API_VERSION" | "User.role" | "Calculator.add" | "User"
   role?: string | null; // "const" for constants, null otherwise
   interface_hash?: string;

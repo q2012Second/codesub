@@ -213,6 +213,117 @@ class User:
         assert "User.save" in names
         assert "User.create" in names
 
+    def test_module_function(self):
+        """Plain module-level function is indexed with kind='function'."""
+        indexer = PythonIndexer()
+        source = """
+def create_order(user_id: int) -> dict:
+    return {"user_id": user_id}
+"""
+        constructs = indexer.index_file(source, "test.py")
+
+        assert len(constructs) == 1
+        c = constructs[0]
+        assert c.kind == "function"
+        assert c.qualname == "create_order"
+        assert c.start_line == 2
+        assert c.end_line == 3
+
+    def test_module_function_decorated(self):
+        """Decorated function includes decorator in line range."""
+        indexer = PythonIndexer()
+        source = """
+@cache
+@validate
+def process_data(data: list) -> list:
+    return data
+"""
+        constructs = indexer.index_file(source, "test.py")
+
+        assert len(constructs) == 1
+        c = constructs[0]
+        assert c.kind == "function"
+        assert c.qualname == "process_data"
+        assert c.start_line == 2  # Decorator line
+        assert c.definition_line == 4  # Actual def line
+        assert c.end_line == 5
+
+    def test_module_function_fingerprints(self):
+        """Changing function body changes body_hash, signature stays same."""
+        indexer = PythonIndexer()
+        source1 = """
+def greet(name: str) -> str:
+    return f"Hello, {name}"
+"""
+        source2 = """
+def greet(name: str) -> str:
+    return f"Hi, {name}"
+"""
+        c1 = indexer.index_file(source1, "test.py")[0]
+        c2 = indexer.index_file(source2, "test.py")[0]
+
+        assert c1.interface_hash == c2.interface_hash  # Same signature
+        assert c1.body_hash != c2.body_hash  # Different body
+
+    def test_module_function_no_types(self):
+        """Function without type annotations is indexed correctly."""
+        indexer = PythonIndexer()
+        source = """
+def process(data, limit=10, verbose=False):
+    return data[:limit]
+"""
+        constructs = indexer.index_file(source, "test.py")
+
+        assert len(constructs) == 1
+        c = constructs[0]
+        assert c.kind == "function"
+        assert c.qualname == "process"
+        assert c.interface_hash  # Has a hash even without types
+        assert c.body_hash  # Has body hash
+
+    def test_module_function_async(self):
+        """Async module-level function is indexed with kind='function'."""
+        indexer = PythonIndexer()
+        source = """
+async def fetch_data(url: str) -> dict:
+    return {}
+"""
+        constructs = indexer.index_file(source, "test.py")
+
+        assert len(constructs) == 1
+        c = constructs[0]
+        assert c.kind == "function"
+        assert c.qualname == "fetch_data"
+
+    def test_find_construct_function_by_qualname(self):
+        """find_construct() locates module-level function by qualname."""
+        indexer = PythonIndexer()
+        source = """
+def helper():
+    pass
+"""
+        c = indexer.find_construct(source, "test.py", "helper")
+        assert c is not None
+        assert c.kind == "function"
+
+    def test_find_construct_function_with_kind_filter(self):
+        """find_construct() locates function when kind='function' is specified."""
+        indexer = PythonIndexer()
+        source = """
+helper = "value"
+
+def helper():
+    pass
+"""
+        # Without kind filter, ambiguous (returns None since multiple matches)
+        c = indexer.find_construct(source, "test.py", "helper")
+        assert c is None
+
+        # With kind filter, finds the function
+        c = indexer.find_construct(source, "test.py", "helper", kind="function")
+        assert c is not None
+        assert c.kind == "function"
+
 
 class TestFingerprinting:
     """Tests for fingerprint computation."""

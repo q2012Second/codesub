@@ -19,11 +19,12 @@ class Construct:
             - "variable": Module-level variable
             - "field": Class field or attribute
             - "method": Method or function within a class
+            - "function": Module-level function (not inside a class)
             - "class": Class declaration
             - "interface": Interface declaration (Java)
             - "enum": Enum declaration
         qualname: Qualified name of the construct.
-            - Simple: "MAX_RETRIES", "User"
+            - Simple: "MAX_RETRIES", "User", "create_order"
             - Nested: "User.role", "Calculator.add(int,int)"
             - Java overloads include param types: "add(int,int)"
         role: Optional role modifier.
@@ -41,7 +42,7 @@ class Construct:
     """
 
     path: str
-    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    kind: str  # "variable"|"field"|"method"|"function"|"class"|"interface"|"enum"
     qualname: str  # "MAX_RETRIES" | "User.role" | "Calculator.add(int,int)"
     role: str | None  # "const" for constants
     start_line: int
