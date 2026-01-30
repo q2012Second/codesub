@@ -16,20 +16,60 @@ def _generate_id() -> str:
     return str(uuid.uuid4())
 
 
+# Valid container kinds that can use include_members
+CONTAINER_KINDS: dict[str, set[str]] = {
+    "python": {"class", "enum"},
+    "java": {"class", "interface", "enum"},
+}
+
+
+@dataclass
+class MemberFingerprint:
+    """Fingerprint data for a container member at baseline."""
+
+    kind: str
+    interface_hash: str
+    body_hash: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "interface_hash": self.interface_hash,
+            "body_hash": self.body_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MemberFingerprint":
+        return cls(
+            kind=data["kind"],
+            interface_hash=data["interface_hash"],
+            body_hash=data["body_hash"],
+        )
+
+
 @dataclass
 class SemanticTarget:
     """Semantic identifier for a code construct."""
 
     language: str  # "python"
-    kind: str  # "variable"|"field"|"method"
-    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save"
+    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    qualname: str  # "MAX_RETRIES" | "User.role" | "User.save" | "User"
     role: str | None = None  # "const" for constants, else None
     interface_hash: str = ""
     body_hash: str = ""
     fingerprint_version: int = 1
+    # Container tracking flags
+    include_members: bool = False
+    include_private: bool = False
+    track_decorators: bool = True
+    # Baseline member fingerprints (only populated when include_members=True)
+    # Keys are RELATIVE member IDs (e.g., "validate", not "User.validate")
+    baseline_members: dict[str, MemberFingerprint] | None = None
+    # Original container qualname at subscription creation (for rename detection)
+    baseline_container_qualname: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "language": self.language,
             "kind": self.kind,
             "qualname": self.qualname,
@@ -38,9 +78,27 @@ class SemanticTarget:
             "body_hash": self.body_hash,
             "fingerprint_version": self.fingerprint_version,
         }
+        # Only include container fields if include_members is True
+        if self.include_members:
+            result["include_members"] = self.include_members
+            result["include_private"] = self.include_private
+            result["track_decorators"] = self.track_decorators
+            if self.baseline_members is not None:
+                result["baseline_members"] = {
+                    k: v.to_dict() for k, v in self.baseline_members.items()
+                }
+            if self.baseline_container_qualname is not None:
+                result["baseline_container_qualname"] = self.baseline_container_qualname
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+        baseline_members = None
+        if "baseline_members" in data and data["baseline_members"] is not None:
+            baseline_members = {
+                k: MemberFingerprint.from_dict(v)
+                for k, v in data["baseline_members"].items()
+            }
         return cls(
             language=data["language"],
             kind=data["kind"],
@@ -49,6 +107,11 @@ class SemanticTarget:
             interface_hash=data.get("interface_hash", ""),
             body_hash=data.get("body_hash", ""),
             fingerprint_version=data.get("fingerprint_version", 1),
+            include_members=data.get("include_members", False),
+            include_private=data.get("include_private", False),
+            track_decorators=data.get("track_decorators", True),
+            baseline_members=baseline_members,
+            baseline_container_qualname=data.get("baseline_container_qualname"),
         )
 
 

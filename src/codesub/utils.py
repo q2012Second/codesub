@@ -151,6 +151,16 @@ def format_subscription(sub: "Subscription", verbose: bool = False) -> str:
 
     result = f"{sub.id[:8]}  {location}{label_str} ({status})"
 
+    # Add container indicator for semantic subscriptions with include_members
+    if sub.semantic and sub.semantic.include_members:
+        member_count = len(sub.semantic.baseline_members or {})
+        result += f" [container: {member_count} members]"
+        if verbose:
+            if sub.semantic.include_private:
+                result += "\n         Include private: yes"
+            if not sub.semantic.track_decorators:
+                result += "\n         Track decorators: no"
+
     if verbose:
         if sub.description:
             result += f"\n         Description: {sub.description}"

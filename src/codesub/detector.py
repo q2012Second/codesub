@@ -4,10 +4,22 @@ from typing import TYPE_CHECKING
 
 from .diff_parser import DiffParser, ranges_overlap
 from .git_repo import GitRepo
-from .models import FileDiff, Hunk, Proposal, ScanResult, SemanticTarget, Subscription, Trigger
+from .models import (
+    FileDiff,
+    Hunk,
+    MemberFingerprint,
+    Proposal,
+    ScanResult,
+    SemanticTarget,
+    Subscription,
+    Trigger,
+)
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from .semantic import Construct
+    from .semantic.indexer_protocol import SemanticIndexer
 
 
 class Detector:
@@ -442,7 +454,21 @@ class Detector:
 
             if new_construct:
                 # Found by exact qualname - check for changes
-                trigger = self._classify_semantic_change(sub, new_construct)
+
+                # Cache the constructs list for reuse
+                cache_key = (new_path, sub.semantic.language)
+                if cache_key not in construct_cache:
+                    construct_cache[cache_key] = indexer.index_file(new_source, new_path)
+                constructs = construct_cache[cache_key]
+
+                # For container subscriptions, delegate to container member check
+                if sub.semantic.include_members:
+                    trigger = self._check_container_members(
+                        sub, new_source, new_path, indexer, new_construct, constructs
+                    )
+                else:
+                    trigger = self._classify_semantic_change(sub, new_construct)
+
                 proposal = None
 
                 if old_path != new_path:
@@ -478,11 +504,24 @@ class Detector:
                 return trigger, proposal
 
             # Stage 2: Hash-based search in same file
-            new_constructs = indexer.index_file(new_source, new_path)
+            cache_key = (new_path, sub.semantic.language)
+            if cache_key in construct_cache:
+                new_constructs = construct_cache[cache_key]
+            else:
+                new_constructs = indexer.index_file(new_source, new_path)
+                construct_cache[cache_key] = new_constructs
+
             match = self._find_by_hash(sub.semantic, new_constructs)
 
             if match:
-                trigger = self._classify_semantic_change(sub, match)
+                # For container subscriptions, use container member check
+                if sub.semantic.include_members:
+                    trigger = self._check_container_members(
+                        sub, new_source, new_path, indexer, match, new_constructs
+                    )
+                else:
+                    trigger = self._classify_semantic_change(sub, match)
+
                 proposal = Proposal(
                     subscription_id=sub.id,
                     subscription=sub,
@@ -508,7 +547,27 @@ class Detector:
         if len(cross_matches) == 1:
             # Found in exactly one other file
             found_path, found_construct = cross_matches[0]
-            trigger = self._classify_semantic_change(sub, found_construct)
+
+            # For container subscriptions, need to index the file for member comparison
+            if sub.semantic.include_members:
+                # Get or cache the constructs for this file
+                cache_key = (found_path, sub.semantic.language)
+                if cache_key in construct_cache:
+                    found_constructs = construct_cache[cache_key]
+                else:
+                    if target_ref:
+                        found_source = "\n".join(self.repo.show_file(target_ref, found_path))
+                    else:
+                        with open(self.repo.root / found_path, encoding="utf-8") as f:
+                            found_source = f.read()
+                    found_constructs = indexer.index_file(found_source, found_path)
+                    construct_cache[cache_key] = found_constructs
+
+                trigger = self._check_container_members(
+                    sub, found_source, found_path, indexer, found_construct, found_constructs
+                )
+            else:
+                trigger = self._classify_semantic_change(sub, found_construct)
 
             # Set confidence based on match tier
             confidence = "high" if match_tier == "exact" else "medium" if match_tier == "body" else "low"
@@ -570,6 +629,157 @@ class Detector:
                 change_type="MISSING",
             ),
             None,
+        )
+
+    def _check_container_members(
+        self,
+        sub: Subscription,
+        new_source: str,
+        new_path: str,
+        indexer: "SemanticIndexer",
+        current_container: "Construct",
+        constructs: "list[Construct]",
+    ) -> Trigger | None:
+        """Check container subscription for member changes.
+
+        Args:
+            sub: The container subscription.
+            new_source: Current source code.
+            new_path: Current file path.
+            indexer: The language indexer.
+            current_container: The matched container construct (may have different qualname if renamed).
+            constructs: Pre-indexed constructs from the file.
+
+        Returns a trigger if any member changed, was added, or was removed.
+        """
+        assert sub.semantic is not None
+        semantic = sub.semantic
+
+        # Determine the container qualnames for comparison
+        baseline_container_qualname = semantic.baseline_container_qualname or semantic.qualname
+        current_container_qualname = current_container.qualname
+
+        # Get current members using the CURRENT container qualname
+        current_members = indexer.get_container_members(
+            new_source, new_path, current_container_qualname, semantic.include_private,
+            constructs=constructs
+        )
+
+        # Build lookup by RELATIVE member ID (strip container prefix)
+        current_by_relative_id: dict[str, "Construct"] = {}
+        for m in current_members:
+            relative_id = m.qualname[len(current_container_qualname) + 1:]  # +1 for dot
+            current_by_relative_id[relative_id] = m
+
+        # Get baseline members (already stored by relative ID)
+        baseline_members = semantic.baseline_members or {}
+
+        member_changes: list[dict[str, Any]] = []
+        members_added: list[str] = []
+        members_removed: list[str] = []
+
+        # Check for changes and removals (compare by relative ID)
+        for relative_id, baseline_fp in baseline_members.items():
+            if relative_id not in current_by_relative_id:
+                members_removed.append(relative_id)
+                member_changes.append({
+                    "relative_id": relative_id,
+                    "baseline_qualname": f"{baseline_container_qualname}.{relative_id}",
+                    "kind": baseline_fp.kind,
+                    "change_type": "MISSING",
+                })
+            else:
+                current = current_by_relative_id[relative_id]
+                if baseline_fp.interface_hash != current.interface_hash:
+                    member_changes.append({
+                        "relative_id": relative_id,
+                        "qualname": current.qualname,
+                        "kind": current.kind,
+                        "change_type": "STRUCTURAL",
+                        "reason": "interface_changed",
+                    })
+                elif baseline_fp.body_hash != current.body_hash:
+                    member_changes.append({
+                        "relative_id": relative_id,
+                        "qualname": current.qualname,
+                        "kind": current.kind,
+                        "change_type": "CONTENT",
+                        "reason": "body_changed",
+                    })
+
+        # Check for additions (compare by relative ID)
+        for relative_id, current in current_by_relative_id.items():
+            if relative_id not in baseline_members:
+                members_added.append(relative_id)
+                member_changes.append({
+                    "relative_id": relative_id,
+                    "qualname": current.qualname,
+                    "kind": current.kind,
+                    "change_type": "ADDED",
+                })
+
+        # Check container-level changes
+        container_changes: dict[str, Any] = {}
+
+        # Check for container rename
+        if current_container_qualname != baseline_container_qualname:
+            container_changes["renamed"] = True
+            container_changes["old_qualname"] = baseline_container_qualname
+            container_changes["new_qualname"] = current_container_qualname
+
+        # Check for decorator/inheritance changes if tracking decorators
+        if semantic.track_decorators:
+            if current_container.interface_hash != semantic.interface_hash:
+                container_changes["interface_changed"] = True
+                member_changes.append({
+                    "relative_id": None,
+                    "qualname": current_container_qualname,
+                    "kind": semantic.kind,
+                    "change_type": "STRUCTURAL",
+                    "reason": "container_interface_changed",
+                })
+
+        if not member_changes and not container_changes:
+            return None  # No changes detected
+
+        # Build trigger with aggregate details
+        details: dict[str, Any] = {
+            "container_qualname": current_container_qualname,
+            "baseline_container_qualname": baseline_container_qualname,
+            "parent_subscription_id": sub.id,
+            "container_changes": container_changes,
+            "member_changes": member_changes,
+            "members_added": members_added,
+            "members_removed": members_removed,
+        }
+
+        reasons: list[str] = []
+        if container_changes.get("renamed"):
+            reasons.append("container_renamed")
+        if members_added:
+            reasons.append("member_added")
+        if members_removed:
+            reasons.append("member_removed")
+        if any(
+            c["change_type"] == "STRUCTURAL" and c.get("reason") != "container_interface_changed"
+            for c in member_changes
+        ):
+            reasons.append("member_interface_changed")
+        if any(c["change_type"] == "CONTENT" for c in member_changes):
+            reasons.append("member_body_changed")
+        if container_changes.get("interface_changed"):
+            reasons.append("container_interface_changed")
+
+        return Trigger(
+            subscription_id=sub.id,
+            subscription=sub,
+            path=new_path,
+            start_line=current_container.start_line,
+            end_line=current_container.end_line,
+            reasons=reasons,
+            matching_hunks=[],
+            change_type="AGGREGATE",
+            details=details,
         )
 
     def _classify_semantic_change(

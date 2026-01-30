@@ -515,3 +515,45 @@ class JavaIndexer:
     def _node_text(self, node: tree_sitter.Node, source_bytes: bytes) -> str:
         """Get text content of a node."""
         return source_bytes[node.start_byte:node.end_byte].decode()
+
+    def get_container_members(
+        self,
+        source: str,
+        path: str,
+        container_qualname: str,
+        include_private: bool = False,
+        constructs: list[Construct] | None = None,
+    ) -> list[Construct]:
+        """Get all direct members of a container construct.
+
+        Note: The include_private parameter only affects Python subscriptions
+        (underscore naming convention). For Java, all members are always included
+        since Java uses visibility modifiers (public/private/protected) which
+        we do not parse. The parameter is accepted for API consistency.
+
+        Args:
+            source: Source code text.
+            path: File path.
+            container_qualname: Qualname of the container.
+            include_private: Ignored for Java; accepted for API consistency.
+            constructs: Optional pre-indexed constructs to avoid re-parsing.
+
+        Returns:
+            List of Construct objects that are direct members of the container.
+        """
+        if constructs is None:
+            constructs = self.index_file(source, path)
+
+        prefix = f"{container_qualname}."
+
+        members = []
+        for c in constructs:
+            if c.qualname.startswith(prefix):
+                member_name = c.qualname[len(prefix):]
+                # Only include direct members (one level deep)
+                if "." in member_name:
+                    continue  # Skip nested members' members
+                # Note: No private filtering for Java - all members included
+                members.append(c)
+
+        return members

@@ -46,3 +46,26 @@ class SemanticIndexer(Protocol):
             The matching construct, or None if not found or ambiguous.
         """
         ...
+
+    def get_container_members(
+        self,
+        source: str,
+        path: str,
+        container_qualname: str,
+        include_private: bool = False,
+        constructs: list[Construct] | None = None,
+    ) -> list[Construct]:
+        """Get all direct members of a container construct.
+
+        Args:
+            source: The complete source code content.
+            path: File path (used in construct metadata).
+            container_qualname: Qualified name of the container (e.g., "User").
+            include_private: Whether to include private members (_prefixed in Python).
+                For Java, this parameter is ignored as all members are included.
+            constructs: Optional pre-indexed constructs to avoid re-parsing.
+
+        Returns:
+            List of Construct objects that are direct members of the container.
+        """
+        ...

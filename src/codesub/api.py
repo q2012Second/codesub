@@ -42,16 +42,30 @@ class AnchorSchema(BaseModel):
     context_after: list[str]
 
 
+class MemberFingerprintSchema(BaseModel):
+    """Schema for container member fingerprint."""
+
+    kind: str
+    interface_hash: str
+    body_hash: str
+
+
 class SemanticTargetSchema(BaseModel):
     """Schema for semantic subscription target."""
 
     language: str  # "python"
-    kind: str  # "variable"|"field"|"method"
-    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add"
+    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add" | "User"
     role: Optional[str] = None  # "const" for constants, None otherwise
     interface_hash: str = ""
     body_hash: str = ""
     fingerprint_version: int = 1
+    # Container tracking fields
+    include_members: bool = False
+    include_private: bool = False
+    track_decorators: bool = True
+    baseline_members: Optional[dict[str, MemberFingerprintSchema]] = None
+    baseline_container_qualname: Optional[str] = None
 
 
 class SubscriptionSchema(BaseModel):
@@ -83,6 +97,18 @@ class SubscriptionCreateRequest(BaseModel):
     trigger_on_duplicate: bool = Field(
         default=False,
         description="For semantic subscriptions: trigger alert if construct found in multiple files"
+    )
+    include_members: bool = Field(
+        default=False,
+        description="For containers (class/enum): track all members and trigger on any change"
+    )
+    include_private: bool = Field(
+        default=False,
+        description="Include private members (_prefixed) when using include_members. Only affects Python."
+    )
+    track_decorators: bool = Field(
+        default=True,
+        description="Track decorator changes on the container (when include_members=True)"
     )
 
 
@@ -369,6 +395,8 @@ def _create_subscription_from_request(
 
     if isinstance(target, SemanticTargetSpec):
         # Semantic subscription
+        from .models import CONTAINER_KINDS, MemberFingerprint
+
         lines = repo.show_file(baseline, target.path)
         source = "\n".join(lines)
 
@@ -382,6 +410,42 @@ def _create_subscription_from_request(
                 f"Construct '{target.qualname}' not found. Use 'codesub symbols' to discover valid targets.",
             )
 
+        # Handle container tracking flags
+        include_members = request.include_members
+        include_private = request.include_private
+        track_decorators = request.track_decorators
+        baseline_members = None
+        baseline_container_qualname = None
+
+        if include_members:
+            # Validate container kind
+            valid_kinds = CONTAINER_KINDS.get(language, set())
+            if construct.kind not in valid_kinds:
+                raise InvalidLocationError(
+                    request.location,
+                    f"--include-members only valid for: {', '.join(sorted(valid_kinds))}. "
+                    f"'{construct.qualname}' is a {construct.kind}.",
+                )
+
+            # Store baseline container qualname
+            baseline_container_qualname = construct.qualname
+
+            # Index file once and capture member fingerprints with relative IDs
+            all_constructs = indexer.index_file(source, target.path)
+            members = indexer.get_container_members(
+                source, target.path, construct.qualname, include_private,
+                constructs=all_constructs
+            )
+            baseline_members = {}
+            for m in members:
+                # Store by relative member ID
+                relative_id = m.qualname[len(construct.qualname) + 1:]
+                baseline_members[relative_id] = MemberFingerprint(
+                    kind=m.kind,
+                    interface_hash=m.interface_hash,
+                    body_hash=m.body_hash,
+                )
+
         # Extract anchors from construct lines
         context_before, watched_lines, context_after = extract_anchors(
             lines, construct.start_line, construct.end_line, context=request.context
@@ -392,7 +456,7 @@ def _create_subscription_from_request(
             context_after=context_after,
         )
 
-        # Create semantic target
+        # Create semantic target with container flags
         semantic = SemanticTarget(
             language=language,
             kind=construct.kind,
@@ -400,6 +464,11 @@ def _create_subscription_from_request(
             role=construct.role,
             interface_hash=construct.interface_hash,
             body_hash=construct.body_hash,
+            include_members=include_members,
+            include_private=include_private,
+            track_decorators=track_decorators,
+            baseline_members=baseline_members,
+            baseline_container_qualname=baseline_container_qualname,
         )
 
         return Subscription.create(

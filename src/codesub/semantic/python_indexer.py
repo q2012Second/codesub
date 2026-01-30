@@ -90,9 +90,11 @@ class PythonIndexer:
         for child in root.children:
             # Handle both plain class_definition and decorated classes
             class_node = None
+            decorated_node = None
             if child.type == "class_definition":
                 class_node = child
             elif child.type == "decorated_definition":
+                decorated_node = child
                 # Find the class_definition inside the decorated_definition
                 for inner in child.children:
                     if inner.type == "class_definition":
@@ -111,43 +113,100 @@ class PythonIndexer:
             if not body:
                 continue
 
-            for member in body.children:
-                    # Class field: x = value
-                    if member.type == "expression_statement":
-                        expr = member.children[0] if member.children else None
-                        if expr and expr.type == "assignment":
-                            construct = self._parse_assignment(
-                                expr, source_bytes, path, class_name, has_errors
-                            )
-                            if construct:
-                                constructs.append(construct)
+            # Emit container construct for the class itself
+            container_construct = self._parse_class_container(
+                class_node, source_bytes, path, has_errors, decorated_node
+            )
+            if container_construct:
+                constructs.append(container_construct)
 
-                    # Method: def name(...): ...
-                    elif member.type == "function_definition":
-                        construct = self._parse_method(
-                            member, source_bytes, path, class_name, has_errors
-                        )
-                        if construct:
-                            constructs.append(construct)
+            # Extract class members
+            constructs.extend(
+                self._extract_class_members(
+                    body, source_bytes, path, class_name, has_errors
+                )
+            )
 
-                    # Decorated method: @decorator def name(...): ...
-                    elif member.type == "decorated_definition":
-                        func = None
-                        for c in member.children:
-                            if c.type == "function_definition":
-                                func = c
-                                break
-                        if func:
-                            construct = self._parse_method(
-                                func,
-                                source_bytes,
-                                path,
-                                class_name,
-                                has_errors,
-                                decorated_node=member,
-                            )
-                            if construct:
-                                constructs.append(construct)
+        return constructs
+
+    def _extract_class_members(
+        self,
+        body: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        class_name: str,
+        has_errors: bool,
+    ) -> list[Construct]:
+        """Extract members (fields, methods, nested classes) from a class body."""
+        constructs: list[Construct] = []
+
+        for member in body.children:
+            # Class field: x = value
+            if member.type == "expression_statement":
+                expr = member.children[0] if member.children else None
+                if expr and expr.type == "assignment":
+                    construct = self._parse_assignment(
+                        expr, source_bytes, path, class_name, has_errors
+                    )
+                    if construct:
+                        constructs.append(construct)
+
+            # Method: def name(...): ...
+            elif member.type == "function_definition":
+                construct = self._parse_method(
+                    member, source_bytes, path, class_name, has_errors
+                )
+                if construct:
+                    constructs.append(construct)
+
+            # Decorated method or nested class
+            elif member.type == "decorated_definition":
+                func = None
+                nested_class = None
+                for c in member.children:
+                    if c.type == "function_definition":
+                        func = c
+                        break
+                    elif c.type == "class_definition":
+                        nested_class = c
+                        break
+
+                if func:
+                    construct = self._parse_method(
+                        func,
+                        source_bytes,
+                        path,
+                        class_name,
+                        has_errors,
+                        decorated_node=member,
+                    )
+                    if construct:
+                        constructs.append(construct)
+                elif nested_class:
+                    # Decorated nested class
+                    nested_construct = self._parse_class_container(
+                        nested_class,
+                        source_bytes,
+                        path,
+                        has_errors,
+                        decorated_node=member,
+                        parent_qualname=class_name,
+                    )
+                    if nested_construct:
+                        constructs.append(nested_construct)
+
+            # Plain nested class
+            elif member.type == "class_definition":
+                nested_construct = self._parse_class_container(
+                    member,
+                    source_bytes,
+                    path,
+                    has_errors,
+                    decorated_node=None,
+                    parent_qualname=class_name,
+                )
+                if nested_construct:
+                    constructs.append(nested_construct)
 
         return constructs
 
@@ -295,3 +354,114 @@ class PythonIndexer:
     def _is_constant_name(self, name: str) -> bool:
         """Check if name follows CONSTANT_CASE convention."""
         return bool(re.match(r"^[A-Z][A-Z0-9_]*$", name))
+
+    def _parse_class_container(
+        self,
+        class_node: tree_sitter.Node,
+        source_bytes: bytes,
+        path: str,
+        has_errors: bool,
+        decorated_node: tree_sitter.Node | None = None,
+        parent_qualname: str | None = None,
+    ) -> Construct | None:
+        """Parse class definition and emit a container Construct.
+
+        Args:
+            class_node: The class_definition node.
+            source_bytes: Source code bytes.
+            path: File path.
+            has_errors: Whether the tree has parse errors.
+            decorated_node: The decorated_definition wrapper if class is decorated.
+            parent_qualname: Parent class qualname for nested classes.
+
+        Returns:
+            Construct for the class container, or None if parsing fails.
+        """
+        name = self._get_name(class_node)
+        if not name:
+            return None
+
+        qualname = f"{parent_qualname}.{name}" if parent_qualname else name
+
+        # Determine kind: check if it's an Enum subclass
+        kind = "class"
+        superclasses = class_node.child_by_field_name("superclasses")
+        if superclasses:
+            superclass_text = self._node_text(superclasses, source_bytes)
+            # Check for Enum inheritance patterns
+            if any(
+                enum_type in superclass_text
+                for enum_type in ("Enum", "IntEnum", "StrEnum", "Flag", "IntFlag")
+            ):
+                kind = "enum"
+
+        # Get decorators
+        decorators: list[str] = []
+        if decorated_node:
+            for child in decorated_node.children:
+                if child.type == "decorator":
+                    decorators.append(self._node_text(child, source_bytes))
+
+        # interface_hash: decorators + base classes (inheritance)
+        bases_text = self._node_text(superclasses, source_bytes) if superclasses else ""
+        interface_hash = compute_interface_hash(
+            kind,
+            annotation=bases_text,  # Use annotation field for inheritance
+            decorators=decorators,
+        )
+
+        # body_hash: full class body
+        body = class_node.child_by_field_name("body")
+        body_hash = compute_body_hash(body, source_bytes) if body else ""
+
+        use_node = decorated_node or class_node
+        return Construct(
+            path=path,
+            kind=kind,
+            qualname=qualname,
+            role=None,
+            start_line=use_node.start_point[0] + 1,
+            end_line=use_node.end_point[0] + 1,
+            interface_hash=interface_hash,
+            body_hash=body_hash,
+            has_parse_error=has_errors,
+        )
+
+    def get_container_members(
+        self,
+        source: str,
+        path: str,
+        container_qualname: str,
+        include_private: bool = False,
+        constructs: list[Construct] | None = None,
+    ) -> list[Construct]:
+        """Get all direct members of a container construct.
+
+        Args:
+            source: Source code text.
+            path: File path.
+            container_qualname: Qualname of the container (e.g., "User").
+            include_private: Whether to include private members (_prefixed).
+            constructs: Optional pre-indexed constructs to avoid re-parsing.
+
+        Returns:
+            List of Construct objects that are direct members of the container.
+        """
+        if constructs is None:
+            constructs = self.index_file(source, path)
+
+        prefix = f"{container_qualname}."
+
+        members = []
+        for c in constructs:
+            if c.qualname.startswith(prefix):
+                member_name = c.qualname[len(prefix) :]
+                # Only include direct members (one level deep)
+                if "." in member_name:
+                    continue  # Skip nested members' members
+                # Filter private if requested
+                if not include_private and member_name.startswith("_"):
+                    continue
+                members.append(c)
+
+        return members

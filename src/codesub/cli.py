@@ -139,6 +139,7 @@ def _add_semantic_subscription(
 ) -> int:
     """Add a semantic subscription."""
     from .errors import UnsupportedLanguageError
+    from .models import CONTAINER_KINDS, MemberFingerprint
     from .semantic import get_indexer_for_path
 
     try:
@@ -158,6 +159,45 @@ def _add_semantic_subscription(
         print("Use 'codesub symbols' to discover valid targets.")
         return 1
 
+    # Get container tracking flags
+    include_members = getattr(args, 'include_members', False)
+    include_private = getattr(args, 'include_private', False)
+    track_decorators = not getattr(args, 'no_track_decorators', False)
+
+    baseline_members = None
+    baseline_container_qualname = None
+
+    if include_members:
+        # Validate container kind
+        valid_kinds = CONTAINER_KINDS.get(language, set())
+        if construct.kind not in valid_kinds:
+            print(
+                f"Error: --include-members only valid for container kinds: "
+                f"{', '.join(sorted(valid_kinds))}"
+            )
+            print(f"'{construct.qualname}' is a {construct.kind}, not a container.")
+            return 1
+
+        # Store baseline container qualname for rename detection
+        baseline_container_qualname = construct.qualname
+
+        # Capture baseline member fingerprints with RELATIVE member IDs
+        # Index file once and reuse
+        all_constructs = indexer.index_file(source, target.path)
+        members = indexer.get_container_members(
+            source, target.path, construct.qualname, include_private,
+            constructs=all_constructs
+        )
+        baseline_members = {}
+        for m in members:
+            # Store by relative member ID (strip container prefix)
+            relative_id = m.qualname[len(construct.qualname) + 1:]  # +1 for the dot
+            baseline_members[relative_id] = MemberFingerprint(
+                kind=m.kind,
+                interface_hash=m.interface_hash,
+                body_hash=m.body_hash,
+            )
+
     # Extract anchors from construct lines
     context_before, watched_lines, context_after = extract_anchors(
         lines, construct.start_line, construct.end_line, context=args.context
@@ -168,7 +208,7 @@ def _add_semantic_subscription(
         context_after=context_after,
     )
 
-    # Create semantic target
+    # Create semantic target with container flags
     semantic = SemanticTarget(
         language=language,
         kind=construct.kind,
@@ -176,6 +216,11 @@ def _add_semantic_subscription(
         role=construct.role,
         interface_hash=construct.interface_hash,
         body_hash=construct.body_hash,
+        include_members=include_members,
+        include_private=include_private,
+        track_decorators=track_decorators,
+        baseline_members=baseline_members,
+        baseline_container_qualname=baseline_container_qualname,
     )
 
     sub = Subscription.create(
@@ -196,6 +241,9 @@ def _add_semantic_subscription(
     print(f"  Location: {target.path}:{construct.start_line}-{construct.end_line}")
     if args.label:
         print(f"  Label: {args.label}")
+    if include_members:
+        member_count = len(baseline_members) if baseline_members else 0
+        print(f"  Container tracking: {member_count} members")
 
     return 0
 
@@ -611,6 +659,21 @@ def create_parser() -> argparse.ArgumentParser:
         "--trigger-on-duplicate",
         action="store_true",
         help="Trigger alert if construct is found in multiple files (default: no trigger)"
+    )
+    add_parser.add_argument(
+        "--include-members",
+        action="store_true",
+        help="Track all members of a container (class/enum). Triggers on any member change."
+    )
+    add_parser.add_argument(
+        "--include-private",
+        action="store_true",
+        help="Include private members (_prefixed) when using --include-members. Only affects Python."
+    )
+    add_parser.add_argument(
+        "--no-track-decorators",
+        action="store_true",
+        help="Disable tracking decorator changes (default: track decorators)"
     )
 
     # list

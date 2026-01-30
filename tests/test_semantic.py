@@ -97,11 +97,13 @@ class User:
 """
         constructs = indexer.index_file(source, "test.py")
 
-        assert len(constructs) == 1
-        c = constructs[0]
-        assert c.kind == "field"
-        assert c.qualname == "User.role"
-        assert c.role is None
+        # Now emits both class and field
+        assert len(constructs) == 2
+        class_c = [c for c in constructs if c.kind == "class"][0]
+        assert class_c.qualname == "User"
+        field_c = [c for c in constructs if c.kind == "field"][0]
+        assert field_c.qualname == "User.role"
+        assert field_c.role is None
 
     def test_class_field_unannotated(self):
         indexer = PythonIndexer()
@@ -111,11 +113,11 @@ class Config:
 """
         constructs = indexer.index_file(source, "test.py")
 
-        assert len(constructs) == 1
-        c = constructs[0]
-        assert c.kind == "field"
-        assert c.qualname == "Config.MAX_SIZE"
-        assert c.role == "const"
+        # Now emits both class and field
+        assert len(constructs) == 2
+        field_c = [c for c in constructs if c.kind == "field"][0]
+        assert field_c.qualname == "Config.MAX_SIZE"
+        assert field_c.role == "const"
 
     def test_class_method(self):
         indexer = PythonIndexer()
@@ -126,12 +128,12 @@ class User:
 """
         constructs = indexer.index_file(source, "test.py")
 
-        assert len(constructs) == 1
-        c = constructs[0]
-        assert c.kind == "method"
-        assert c.qualname == "User.save"
-        assert c.start_line == 3
-        assert c.end_line == 4
+        # Now emits both class and method
+        assert len(constructs) == 2
+        method_c = [c for c in constructs if c.kind == "method"][0]
+        assert method_c.qualname == "User.save"
+        assert method_c.start_line == 3
+        assert method_c.end_line == 4
 
     def test_decorated_method(self):
         indexer = PythonIndexer()
@@ -143,12 +145,12 @@ class User:
 """
         constructs = indexer.index_file(source, "test.py")
 
-        assert len(constructs) == 1
-        c = constructs[0]
-        assert c.kind == "method"
-        assert c.qualname == "User.name"
-        assert c.start_line == 3  # Decorator line
-        assert c.end_line == 5
+        # Now emits both class and method
+        assert len(constructs) == 2
+        method_c = [c for c in constructs if c.kind == "method"][0]
+        assert method_c.qualname == "User.name"
+        assert method_c.start_line == 3  # Decorator line
+        assert method_c.end_line == 5
 
     def test_find_construct(self):
         indexer = PythonIndexer()
@@ -270,8 +272,8 @@ class C:
     def f(self, x=2):
         pass
 """
-        c1 = indexer.index_file(source1, "test.py")[0]
-        c2 = indexer.index_file(source2, "test.py")[0]
+        c1 = [c for c in indexer.index_file(source1, "test.py") if c.kind == "method"][0]
+        c2 = [c for c in indexer.index_file(source2, "test.py") if c.kind == "method"][0]
 
         assert c1.interface_hash != c2.interface_hash  # Param defaults in interface
 
@@ -287,8 +289,8 @@ class C:
     def f(self):
         return 2
 """
-        c1 = indexer.index_file(source1, "test.py")[0]
-        c2 = indexer.index_file(source2, "test.py")[0]
+        c1 = [c for c in indexer.index_file(source1, "test.py") if c.kind == "method"][0]
+        c2 = [c for c in indexer.index_file(source2, "test.py") if c.kind == "method"][0]
 
         assert c1.interface_hash == c2.interface_hash  # Same interface
         assert c1.body_hash != c2.body_hash  # Different body
@@ -306,8 +308,8 @@ class C:
         # comment
         return 1
 """
-        c1 = indexer.index_file(source1, "test.py")[0]
-        c2 = indexer.index_file(source2, "test.py")[0]
+        c1 = [c for c in indexer.index_file(source1, "test.py") if c.kind == "method"][0]
+        c2 = [c for c in indexer.index_file(source2, "test.py") if c.kind == "method"][0]
 
         # Both hashes should be the same since comments are ignored
         assert c1.body_hash == c2.body_hash
@@ -325,8 +327,8 @@ class C:
     def f(self):
         pass
 """
-        c1 = indexer.index_file(source1, "test.py")[0]
-        c2 = indexer.index_file(source2, "test.py")[0]
+        c1 = [c for c in indexer.index_file(source1, "test.py") if c.kind == "method"][0]
+        c2 = [c for c in indexer.index_file(source2, "test.py") if c.kind == "method"][0]
 
         assert c1.interface_hash != c2.interface_hash  # Decorator changes interface
 
