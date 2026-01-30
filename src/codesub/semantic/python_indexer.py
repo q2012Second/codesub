@@ -283,6 +283,7 @@ class PythonIndexer:
             role=role,
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
+            definition_line=node.start_point[0] + 1,
             interface_hash=interface_hash,
             body_hash=body_hash,
             has_parse_error=has_errors,
@@ -335,6 +336,7 @@ class PythonIndexer:
             role=None,
             start_line=use_node.start_point[0] + 1,
             end_line=use_node.end_point[0] + 1,
+            definition_line=node.start_point[0] + 1,  # Actual def line, not decorator
             interface_hash=interface_hash,
             body_hash=body_hash,
             has_parse_error=has_errors,
@@ -422,6 +424,7 @@ class PythonIndexer:
             role=None,
             start_line=use_node.start_point[0] + 1,
             end_line=use_node.end_point[0] + 1,
+            definition_line=class_node.start_point[0] + 1,  # Actual class line, not decorator
             interface_hash=interface_hash,
             body_hash=body_hash,
             has_parse_error=has_errors,

@@ -29,8 +29,10 @@ class Construct:
         role: Optional role modifier.
             - "const": For constants (UPPER_CASE naming)
             - None: For regular constructs
-        start_line: 1-based start line number.
+        start_line: 1-based start line number (includes decorators if present).
         end_line: 1-based end line number (inclusive).
+        definition_line: 1-based line of the actual definition (class/def keyword).
+            For decorated constructs, this differs from start_line.
         interface_hash: Hash of the construct's interface/signature.
             Changes indicate structural changes (type annotations, parameters).
         body_hash: Hash of the construct's body/value.
@@ -44,6 +46,7 @@ class Construct:
     role: str | None  # "const" for constants
     start_line: int
     end_line: int
+    definition_line: int  # Line of actual class/def keyword (differs from start_line if decorated)
     interface_hash: str
     body_hash: str
     has_parse_error: bool = False

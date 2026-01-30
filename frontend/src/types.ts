@@ -236,6 +236,7 @@ export interface ConstructInfo {
   role: string | null;
   start_line: number;
   end_line: number;
+  definition_line: number;  // Line of actual definition (differs from start_line if decorated)
   target: string;
 }
 

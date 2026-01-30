@@ -287,6 +287,7 @@ class ConstructSchema(BaseModel):
     role: Optional[str] = None
     start_line: int
     end_line: int
+    definition_line: int  # Line of actual definition (differs from start_line if decorated)
     target: str  # Ready-to-use location string
 
 
@@ -1250,6 +1251,7 @@ def get_project_file_symbols(
                 role=c.role,
                 start_line=c.start_line,
                 end_line=c.end_line,
+                definition_line=c.definition_line,
                 target=f"{path}::{c.kind}:{c.qualname}",
             )
             for c in constructs

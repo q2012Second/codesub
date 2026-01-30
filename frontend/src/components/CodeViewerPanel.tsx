@@ -81,12 +81,13 @@ export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCance
     return symbols.constructs.filter(c => TRACKABLE_KINDS.has(c.kind));
   }, [symbols]);
 
-  // Build line-to-construct mapping (only start lines, only trackable)
+  // Build line-to-construct mapping (only definition lines, only trackable)
   const lineConstructMap = useMemo(() => {
     const map = new Map<number, ConstructInfo>();
     for (const construct of trackableConstructs) {
-      if (!map.has(construct.start_line)) {
-        map.set(construct.start_line, construct);
+      // Use definition_line for highlighting (actual class/def line, not decorator)
+      if (!map.has(construct.definition_line)) {
+        map.set(construct.definition_line, construct);
       }
     }
     return map;
