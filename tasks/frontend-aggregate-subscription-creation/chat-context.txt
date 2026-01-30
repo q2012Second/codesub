@@ -1,0 +1,2566 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of a subset of the repository's contents that is considered the most important context.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: frontend/src/types.ts, frontend/src/components/SubscriptionForm.tsx, frontend/src/components/CodeViewerPanel.tsx, frontend/src/components/SubscriptionList.tsx, frontend/src/components/SubscriptionDetail.tsx, src/codesub/api.py
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+frontend/
+  src/
+    components/
+      CodeViewerPanel.tsx
+      SubscriptionDetail.tsx
+      SubscriptionForm.tsx
+      SubscriptionList.tsx
+    types.ts
+src/
+  codesub/
+    api.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="frontend/src/components/CodeViewerPanel.tsx">
+import { useState, useEffect, useMemo, useRef } from 'react';
+import type { FileContentResponse, SymbolsResponse, ConstructInfo, CodeBrowserSelection } from '../types';
+import { getProjectFileContent, getProjectFileSymbols } from '../api';
+
+// Construct kinds that can be tracked as subscriptions
+// Note: Python/Java indexers only return these kinds as trackable constructs
+const TRACKABLE_KINDS = new Set(['variable', 'field', 'method']);
+
+interface Props {
+  projectId: string;
+  filePath: string;
+  onBack: () => void;
+  onSelect: (selection: CodeBrowserSelection) => void;
+  onCancel: () => void;
+}
+
+export function CodeViewerPanel({ projectId, filePath, onBack, onSelect, onCancel }: Props) {
+  const [content, setContent] = useState<FileContentResponse | null>(null);
+  const [symbols, setSymbols] = useState<SymbolsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Selection state
+  const [selectedConstruct, setSelectedConstruct] = useState<ConstructInfo | null>(null);
+  const [lineSelection, setLineSelection] = useState<{ start: number; end: number } | null>(null);
+  const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null);
+
+  // Hover state for line numbers
+  const [hoveredLineNum, setHoveredLineNum] = useState<number | null>(null);
+
+  // Drag selection state
+  const [isDragging, setIsDragging] = useState(false);
+  const dragAnchorRef = useRef<number | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Load content and symbols
+  useEffect(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
+    setLoading(true);
+    setError(null);
+
+    Promise.allSettled([
+      getProjectFileContent(projectId, filePath, signal),
+      getProjectFileSymbols(projectId, filePath, undefined, signal),
+    ]).then(([contentResult, symbolsResult]) => {
+      if (signal.aborted) return;
+
+      if (contentResult.status === 'fulfilled') {
+        setContent(contentResult.value);
+      } else {
+        setError(contentResult.reason?.message || 'Failed to load file');
+      }
+
+      if (symbolsResult.status === 'fulfilled') {
+        setSymbols(symbolsResult.value);
+      }
+
+      setLoading(false);
+    });
+
+    return () => abortControllerRef.current?.abort();
+  }, [projectId, filePath]);
+
+  // Handle Escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [onCancel]);
+
+  // Filter to only trackable constructs
+  const trackableConstructs = useMemo(() => {
+    if (!symbols) return [];
+    return symbols.constructs.filter(c => TRACKABLE_KINDS.has(c.kind));
+  }, [symbols]);
+
+  // Build line-to-construct mapping (only start lines, only trackable)
+  const lineConstructMap = useMemo(() => {
+    const map = new Map<number, ConstructInfo>();
+    for (const construct of trackableConstructs) {
+      if (!map.has(construct.start_line)) {
+        map.set(construct.start_line, construct);
+      }
+    }
+    return map;
+  }, [trackableConstructs]);
+
+  // Handle line number mousedown (start drag or click)
+  const handleLineNumberMouseDown = (lineNumber: number, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedConstruct(null);
+
+    if (event.shiftKey && selectionAnchor !== null) {
+      // Shift-click extends selection
+      const start = Math.min(selectionAnchor, lineNumber);
+      const end = Math.max(selectionAnchor, lineNumber);
+      setLineSelection({ start, end });
+    } else {
+      // Start drag selection
+      setIsDragging(true);
+      dragAnchorRef.current = lineNumber;
+      setSelectionAnchor(lineNumber);
+      setLineSelection({ start: lineNumber, end: lineNumber });
+    }
+  };
+
+  // Handle mouse enter on line number during drag
+  const handleLineNumberMouseEnter = (lineNumber: number) => {
+    setHoveredLineNum(lineNumber);
+    if (isDragging && dragAnchorRef.current !== null) {
+      const start = Math.min(dragAnchorRef.current, lineNumber);
+      const end = Math.max(dragAnchorRef.current, lineNumber);
+      setLineSelection({ start, end });
+    }
+  };
+
+  // Handle mouse up to end drag
+  const handleLineNumberMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Global mouseup to end drag if released outside line numbers
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDragging) {
+        setIsDragging(false);
+      }
+    };
+    document.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => document.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [isDragging]);
+
+  // Handle construct click (semantic selection)
+  const handleConstructClick = (construct: ConstructInfo, event: React.MouseEvent) => {
+    event.stopPropagation();
+    setLineSelection(null);
+    setSelectionAnchor(null);
+    setSelectedConstruct(construct);
+  };
+
+  // Get current selection result
+  const getSelectionResult = (): CodeBrowserSelection | null => {
+    if (selectedConstruct) {
+      return {
+        type: 'semantic',
+        location: selectedConstruct.target,
+        label: `${selectedConstruct.kind}: ${selectedConstruct.qualname}`,
+      };
+    }
+    if (lineSelection) {
+      const { start, end } = lineSelection;
+      const location = start === end
+        ? `${filePath}:${start}`
+        : `${filePath}:${start}-${end}`;
+      return { type: 'lines', location };
+    }
+    return null;
+  };
+
+  // Select full file
+  const handleSelectFullFile = () => {
+    if (content) {
+      setSelectedConstruct(null);
+      setLineSelection({ start: 1, end: content.total_lines });
+      setSelectionAnchor(1);
+    }
+  };
+
+  // Confirm selection
+  const handleConfirm = () => {
+    const result = getSelectionResult();
+    if (result) onSelect(result);
+  };
+
+  const selection = getSelectionResult();
+
+  if (loading) {
+    return <div style={{ padding: 32, textAlign: 'center' }}>Loading file...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 32 }}>
+        <div style={{ color: '#dc3545', marginBottom: 16 }}>{error}</div>
+        <button onClick={onBack}>Go Back</button>
+      </div>
+    );
+  }
+
+  if (!content) {
+    return <div style={{ padding: 32 }}>No content</div>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Header */}
+      <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={onBack} style={{ padding: '4px 8px' }}>&larr; Back</button>
+        <code style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {filePath}
+        </code>
+        {content.language && (
+          <span style={{
+            padding: '2px 8px',
+            background: '#e3f2fd',
+            borderRadius: 4,
+            fontSize: 12,
+          }}>
+            {content.language}
+          </span>
+        )}
+      </div>
+
+      {/* Warnings */}
+      {content.truncated && (
+        <div style={{
+          padding: '8px 12px',
+          background: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: 4,
+          marginBottom: 12,
+          fontSize: 13,
+        }}>
+          File truncated: showing {content.lines.length} of {content.total_lines} lines
+        </div>
+      )}
+
+      {symbols?.has_parse_error && (
+        <div style={{
+          padding: '8px 12px',
+          background: '#fff3cd',
+          border: '1px solid #ffc107',
+          borderRadius: 4,
+          marginBottom: 12,
+          fontSize: 13,
+        }}>
+          Parse warning: Some constructs may not be detected. Line selection still works.
+        </div>
+      )}
+
+      {/* Help text */}
+      <div style={{ marginBottom: 12, fontSize: 13, color: '#666' }}>
+        {content.supports_semantic && trackableConstructs.length > 0
+          ? 'Click or drag line numbers to select lines. Click highlighted code to select constructs.'
+          : 'Click or drag line numbers to select lines.'}
+      </div>
+
+      {/* Code viewer */}
+      <div style={{
+        flex: 1,
+        overflow: 'auto',
+        border: '1px solid #ddd',
+        borderRadius: 4,
+        fontFamily: 'monospace',
+        fontSize: 13,
+        lineHeight: 1.5,
+      }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+          <tbody>
+            {content.lines.map((line, idx) => {
+              const lineNum = idx + 1;
+              const construct = lineConstructMap.get(lineNum);
+              const isInSelection = lineSelection &&
+                lineNum >= lineSelection.start &&
+                lineNum <= lineSelection.end;
+              const isConstructSelected = selectedConstruct &&
+                lineNum >= selectedConstruct.start_line &&
+                lineNum <= selectedConstruct.end_line;
+              const isLineNumHovered = hoveredLineNum === lineNum;
+
+              return (
+                <tr
+                  key={lineNum}
+                  style={{
+                    background: isInSelection
+                      ? '#e3f2fd'
+                      : isConstructSelected
+                        ? '#c8e6c9'
+                        : 'transparent',
+                  }}
+                >
+                  {/* Line number - clickable/draggable for line selection */}
+                  <td
+                    onMouseDown={(e) => handleLineNumberMouseDown(lineNum, e)}
+                    onMouseEnter={() => handleLineNumberMouseEnter(lineNum)}
+                    onMouseLeave={() => setHoveredLineNum(null)}
+                    onMouseUp={handleLineNumberMouseUp}
+                    style={{
+                      padding: '0 12px 0 8px',
+                      textAlign: 'right',
+                      color: isInSelection ? '#1565c0' : '#666',
+                      fontWeight: isInSelection ? 600 : 400,
+                      userSelect: 'none',
+                      borderRight: '1px solid #eee',
+                      width: 1,
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                      background: isLineNumHovered && !isInSelection ? '#f0f0f0' : 'transparent',
+                    }}
+                    title="Click to select line, drag or shift-click to extend"
+                  >
+                    {lineNum}
+                  </td>
+                  {/* Code content */}
+                  <td style={{ padding: '0 8px', whiteSpace: 'pre' }}>
+                    {construct ? (
+                      <span
+                        onClick={(e) => handleConstructClick(construct, e)}
+                        style={{
+                          background: selectedConstruct === construct ? '#a5d6a7' : '#e8f5e9',
+                          borderRadius: 2,
+                          padding: '0 2px',
+                          cursor: 'pointer',
+                          transition: 'background 0.1s',
+                        }}
+                        onMouseEnter={(e) => {
+                          if (selectedConstruct !== construct) {
+                            e.currentTarget.style.background = '#c8e6c9';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (selectedConstruct !== construct) {
+                            e.currentTarget.style.background = '#e8f5e9';
+                          }
+                        }}
+                        title={`${construct.kind}: ${construct.qualname} (click to select)`}
+                      >
+                        {line || ' '}
+                      </span>
+                    ) : (
+                      line || ' '
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Selection bar */}
+      <div style={{
+        marginTop: 12,
+        padding: '12px 16px',
+        background: '#f5f5f5',
+        borderRadius: 4,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+      }}>
+        <button onClick={handleSelectFullFile} style={{ padding: '6px 12px' }}>
+          Select Full File
+        </button>
+
+        <div style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {selection ? (
+            <>
+              <span style={{
+                padding: '2px 6px',
+                background: selection.type === 'semantic' ? '#c8e6c9' : '#bbdefb',
+                borderRadius: 3,
+                fontSize: 11,
+                marginRight: 8,
+              }}>
+                {selection.type === 'semantic' ? 'Semantic' : 'Lines'}
+              </span>
+              <code>{selection.location}</code>
+            </>
+          ) : (
+            <span style={{ color: '#999' }}>No selection</span>
+          )}
+        </div>
+
+        <button onClick={onCancel} style={{ padding: '6px 12px' }}>Cancel</button>
+        <button
+          onClick={handleConfirm}
+          disabled={!selection}
+          style={{
+            padding: '6px 16px',
+            background: selection ? '#0066cc' : '#ccc',
+            color: 'white',
+            border: 'none',
+            borderRadius: 4,
+            cursor: selection ? 'pointer' : 'not-allowed',
+          }}
+        >
+          Use Selection
+        </button>
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionList.tsx">
+import type { Subscription } from '../types';
+
+interface Props {
+  subscriptions: Subscription[];
+  onSelect: (id: string) => void;
+}
+
+// Helper to check if subscription is semantic
+function isSemantic(sub: Subscription): boolean {
+  return sub.semantic != null;
+}
+
+// Helper to format location display
+function formatLocation(sub: Subscription): string {
+  if (sub.semantic) {
+    return `${sub.path}::${sub.semantic.qualname}`;
+  }
+  return sub.start_line === sub.end_line
+    ? `${sub.path}:${sub.start_line}`
+    : `${sub.path}:${sub.start_line}-${sub.end_line}`;
+}
+
+// Badge component for subscription type
+function TypeBadge({ semantic }: { semantic: boolean }) {
+  const style = {
+    display: 'inline-block',
+    padding: '1px 4px',
+    borderRadius: 3,
+    fontSize: 10,
+    fontWeight: 600 as const,
+    marginRight: 6,
+    background: semantic ? '#d1ecf1' : '#f5f5f5',
+    color: semantic ? '#0c5460' : '#666',
+    border: `1px solid ${semantic ? '#bee5eb' : '#ddd'}`,
+  };
+  return <span style={style}>{semantic ? 'S' : 'L'}</span>;
+}
+
+export function SubscriptionList({ subscriptions, onSelect }: Props) {
+  if (subscriptions.length === 0) {
+    return <p style={{ color: '#666', padding: '20px 0' }}>No subscriptions found.</p>;
+  }
+
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr style={{ textAlign: 'left', borderBottom: '2px solid #ddd' }}>
+          <th style={{ padding: '12px 8px' }}>ID</th>
+          <th style={{ padding: '12px 8px' }}>Type</th>
+          <th style={{ padding: '12px 8px' }}>Location</th>
+          <th style={{ padding: '12px 8px' }}>Label</th>
+          <th style={{ padding: '12px 8px' }}>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {subscriptions.map((sub) => (
+          <tr
+            key={sub.id}
+            onClick={() => onSelect(sub.id)}
+            style={{
+              cursor: 'pointer',
+              borderBottom: '1px solid #eee',
+              opacity: sub.active ? 1 : 0.6,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#f9f9f9')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <td style={{ padding: '12px 8px', fontFamily: 'monospace', fontSize: 13 }}>
+              {sub.id.slice(0, 8)}
+            </td>
+            <td style={{ padding: '12px 8px' }}>
+              <TypeBadge semantic={isSemantic(sub)} />
+            </td>
+            <td style={{ padding: '12px 8px' }}>
+              {isSemantic(sub) && sub.semantic ? (
+                <span>
+                  <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                    {sub.semantic.qualname}
+                  </span>
+                  <span style={{ color: '#666', marginLeft: 4 }}>({sub.semantic.kind})</span>
+                  {sub.semantic.role === 'const' && (
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        padding: '1px 4px',
+                        borderRadius: 10,
+                        fontSize: 10,
+                        background: '#fff3cd',
+                        color: '#856404',
+                      }}
+                    >
+                      const
+                    </span>
+                  )}
+                  <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#999', marginLeft: 8 }}>
+                    {sub.path}:{sub.start_line}-{sub.end_line}
+                  </span>
+                </span>
+              ) : (
+                <span style={{ fontFamily: 'monospace', fontSize: 13 }}>
+                  {formatLocation(sub)}
+                </span>
+              )}
+            </td>
+            <td style={{ padding: '12px 8px' }}>{sub.label || <span style={{ color: '#999' }}>-</span>}</td>
+            <td style={{ padding: '12px 8px' }}>
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  fontSize: 12,
+                  background: sub.active ? '#d4edda' : '#e9ecef',
+                  color: sub.active ? '#155724' : '#6c757d',
+                }}
+              >
+                {sub.active ? 'active' : 'inactive'}
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionDetail.tsx">
+import { useState } from 'react';
+import type { Subscription } from '../types';
+import { deleteProjectSubscription, reactivateProjectSubscription } from '../api';
+
+interface Props {
+  subscription: Subscription;
+  projectId: string;
+  onBack: () => void;
+  onEdit: () => void;
+  onDeleted: () => void;
+  onReactivated: () => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+}
+
+export function SubscriptionDetail({
+  subscription: sub,
+  projectId,
+  onBack,
+  onEdit,
+  onDeleted,
+  onReactivated,
+  showMessage,
+}: Props) {
+  const [deleting, setDeleting] = useState(false);
+  const [confirmHardDelete, setConfirmHardDelete] = useState(false);
+
+  const isSemantic = sub.semantic != null;
+  const location = sub.semantic
+    ? `${sub.path}::${sub.semantic.qualname}`
+    : sub.start_line === sub.end_line
+      ? `${sub.path}:${sub.start_line}`
+      : `${sub.path}:${sub.start_line}-${sub.end_line}`;
+
+  const handleDelete = async (hard: boolean) => {
+    if (hard && !confirmHardDelete) {
+      setConfirmHardDelete(true);
+      return;
+    }
+    try {
+      setDeleting(true);
+      await deleteProjectSubscription(projectId, sub.id, hard);
+      onDeleted();
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Failed to delete');
+      setDeleting(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    try {
+      await reactivateProjectSubscription(projectId, sub.id);
+      onReactivated();
+      showMessage('success', 'Subscription reactivated');
+    } catch (e) {
+      showMessage('error', e instanceof Error ? e.message : 'Failed to reactivate');
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ marginBottom: 16 }}>
+        &larr; Back to list
+      </button>
+
+      <div style={{ background: '#f8f9fa', padding: 20, borderRadius: 6, marginBottom: 20 }}>
+        <h2 style={{ marginBottom: 20, fontSize: 18 }}>Subscription Details</h2>
+
+        <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '12px 20px' }}>
+          <dt style={{ fontWeight: 600, color: '#555' }}>ID:</dt>
+          <dd style={{ fontFamily: 'monospace', fontSize: 13 }}>{sub.id}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Type:</dt>
+          <dd>
+            <span
+              style={{
+                display: 'inline-block',
+                padding: '2px 6px',
+                borderRadius: 3,
+                fontSize: 11,
+                fontWeight: 600,
+                background: isSemantic ? '#d1ecf1' : '#f5f5f5',
+                color: isSemantic ? '#0c5460' : '#666',
+                border: `1px solid ${isSemantic ? '#bee5eb' : '#ddd'}`,
+              }}
+            >
+              {isSemantic ? 'Semantic' : 'Line-based'}
+            </span>
+          </dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Location:</dt>
+          <dd style={{ fontFamily: 'monospace', fontSize: 13 }}>{location}</dd>
+
+          {isSemantic && sub.semantic && (
+            <>
+              <dt style={{ fontWeight: 600, color: '#555' }}>Kind:</dt>
+              <dd style={{ textTransform: 'capitalize' }}>
+                {sub.semantic.kind}
+                {sub.semantic.role && (
+                  <span
+                    style={{
+                      marginLeft: 8,
+                      fontSize: 11,
+                      color: '#856404',
+                      background: '#fff3cd',
+                      padding: '1px 4px',
+                      borderRadius: 3,
+                    }}
+                  >
+                    {sub.semantic.role}
+                  </span>
+                )}
+              </dd>
+
+              <dt style={{ fontWeight: 600, color: '#555' }}>Qualified Name:</dt>
+              <dd style={{ fontFamily: 'monospace', fontSize: 13 }}>{sub.semantic.qualname}</dd>
+
+              <dt style={{ fontWeight: 600, color: '#555' }}>Language:</dt>
+              <dd style={{ textTransform: 'capitalize' }}>{sub.semantic.language}</dd>
+            </>
+          )}
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Label:</dt>
+          <dd>{sub.label || <span style={{ color: '#999' }}>-</span>}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Description:</dt>
+          <dd>{sub.description || <span style={{ color: '#999' }}>-</span>}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Status:</dt>
+          <dd>
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 4,
+                fontSize: 12,
+                background: sub.active ? '#d4edda' : '#e9ecef',
+                color: sub.active ? '#155724' : '#6c757d',
+              }}
+            >
+              {sub.active ? 'Active' : 'Inactive'}
+            </span>
+          </dd>
+
+          {!isSemantic && (
+            <>
+              <dt style={{ fontWeight: 600, color: '#555' }}>Lines watched:</dt>
+              <dd>{sub.end_line - sub.start_line + 1}</dd>
+            </>
+          )}
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Created:</dt>
+          <dd>{new Date(sub.created_at).toLocaleString()}</dd>
+
+          <dt style={{ fontWeight: 600, color: '#555' }}>Updated:</dt>
+          <dd>{new Date(sub.updated_at).toLocaleString()}</dd>
+        </dl>
+
+        {/* Fingerprint details for semantic subscriptions */}
+        {isSemantic && sub.semantic && (
+          <details style={{ marginTop: 16 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#555', fontSize: 14 }}>
+              Fingerprint Details
+            </summary>
+            <div
+              style={{
+                marginTop: 8,
+                padding: 12,
+                background: '#fff',
+                border: '1px solid #e9ecef',
+                borderRadius: 4,
+              }}
+            >
+              <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', margin: 0 }}>
+                <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Interface Hash:</dt>
+                <dd style={{ fontFamily: 'monospace', fontSize: 12, color: '#333' }}>
+                  {sub.semantic.interface_hash || '-'}
+                </dd>
+
+                <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Body Hash:</dt>
+                <dd style={{ fontFamily: 'monospace', fontSize: 12, color: '#333' }}>
+                  {sub.semantic.body_hash || '-'}
+                </dd>
+
+                <dt style={{ fontWeight: 500, color: '#666', fontSize: 13 }}>Fingerprint Version:</dt>
+                <dd style={{ fontFamily: 'monospace', fontSize: 12, color: '#333' }}>
+                  {sub.semantic.fingerprint_version ?? '-'}
+                </dd>
+              </dl>
+            </div>
+          </details>
+        )}
+
+        {sub.anchors && (
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{ marginBottom: 12, fontSize: 14, fontWeight: 600 }}>Watched Lines:</h3>
+            <pre
+              style={{
+                background: '#fff',
+                padding: 16,
+                borderRadius: 4,
+                overflow: 'auto',
+                fontSize: 13,
+                lineHeight: 1.6,
+                border: '1px solid #e9ecef',
+              }}
+            >
+              {sub.anchors.context_before.map((line, i) => (
+                <div key={`before-${i}`} style={{ color: '#6c757d' }}>
+                  {line || ' '}
+                </div>
+              ))}
+              {sub.anchors.lines.map((line, i) => (
+                <div
+                  key={`line-${i}`}
+                  style={{ background: '#fff3cd', margin: '0 -16px', padding: '0 16px' }}
+                >
+                  {line || ' '}
+                </div>
+              ))}
+              {sub.anchors.context_after.map((line, i) => (
+                <div key={`after-${i}`} style={{ color: '#6c757d' }}>
+                  {line || ' '}
+                </div>
+              ))}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={onEdit}>Edit</button>
+
+        {!sub.active && (
+          <button onClick={handleReactivate} style={{ background: '#d4edda', borderColor: '#c3e6cb' }}>
+            Reactivate
+          </button>
+        )}
+
+        {sub.active && (
+          <button onClick={() => handleDelete(false)} disabled={deleting}>
+            Deactivate
+          </button>
+        )}
+
+        {confirmHardDelete ? (
+          <>
+            <button
+              onClick={() => handleDelete(true)}
+              disabled={deleting}
+              style={{ background: '#dc3545', color: 'white', borderColor: '#dc3545' }}
+            >
+              Confirm Delete Forever
+            </button>
+            <button onClick={() => setConfirmHardDelete(false)}>Cancel</button>
+          </>
+        ) : (
+          <button
+            onClick={() => handleDelete(true)}
+            disabled={deleting}
+            style={{ color: '#dc3545', borderColor: '#dc3545' }}
+          >
+            Delete Forever
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/components/SubscriptionForm.tsx">
+import { useState } from 'react';
+import type { Subscription, SubscriptionCreateRequest, SubscriptionUpdateRequest, CodeBrowserSelection } from '../types';
+import { createProjectSubscription, updateProjectSubscription } from '../api';
+import { CodeBrowserModal } from './CodeBrowserModal';
+
+interface Props {
+  subscription: Subscription | null;  // null = create mode
+  projectId: string;
+  onCancel: () => void;
+  onSaved: (sub: Subscription, isNew: boolean) => void;
+  showMessage: (type: 'success' | 'error', text: string) => void;
+}
+
+export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, showMessage }: Props) {
+  const isEdit = subscription !== null;
+
+  const [location, setLocation] = useState('');
+  const [label, setLabel] = useState(subscription?.label || '');
+  const [description, setDescription] = useState(subscription?.description || '');
+  const [context, setContext] = useState(2);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showBrowser, setShowBrowser] = useState(false);
+
+  const handleBrowserSelect = (selection: CodeBrowserSelection) => {
+    setLocation(selection.location);
+    if (selection.label && !label) {
+      setLabel(selection.label);
+    }
+    setShowBrowser(false);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+
+    try {
+      let result: Subscription;
+
+      if (isEdit && subscription) {
+        const data: SubscriptionUpdateRequest = {
+          label: label || undefined,
+          description: description || undefined,
+        };
+        result = await updateProjectSubscription(projectId, subscription.id, data);
+      } else {
+        const data: SubscriptionCreateRequest = {
+          location,
+          label: label || undefined,
+          description: description || undefined,
+          context,
+        };
+        result = await createProjectSubscription(projectId, data);
+      }
+
+      onSaved(result, !isEdit);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save';
+      setError(msg);
+      showMessage('error', msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <h2 style={{ marginBottom: 20, fontSize: 18 }}>
+        {isEdit ? 'Edit Subscription' : 'Create Subscription'}
+      </h2>
+
+      <form onSubmit={handleSubmit} style={{ maxWidth: 500 }}>
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Location <span style={{ color: '#dc3545' }}>*</span>
+            </label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="text"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="path/to/file.py:42 or path/to/file.py::ClassName.method"
+                required
+                style={{ flex: 1, fontFamily: 'monospace' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowBrowser(true)}
+                style={{
+                  padding: '8px 16px',
+                  border: '1px solid #ddd',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  background: '#f8f9fa',
+                }}
+              >
+                Browse...
+              </button>
+            </div>
+            <small style={{ color: '#666', display: 'block', marginTop: 4 }}>
+              <strong>Line-based:</strong> path:line or path:start-end (e.g., config.py:10-25)
+              <br />
+              <strong>Semantic:</strong> path::QualifiedName (e.g., auth.py::User.validate)
+            </small>
+            {location.includes('::') && location.split('::')[1]?.trim() && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '8px 12px',
+                  background: '#d1ecf1',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  color: '#0c5460',
+                }}
+              >
+                Detected: <strong>semantic subscription</strong> - will track code construct by identity
+              </div>
+            )}
+          </div>
+        )}
+
+        {isEdit && subscription && (
+          <div style={{ marginBottom: 20, padding: 16, background: '#f8f9fa', borderRadius: 4 }}>
+            <strong>Location:</strong>{' '}
+            <code style={{ fontSize: 13 }}>
+              {subscription.semantic
+                ? `${subscription.path}::${subscription.semantic.qualname}`
+                : subscription.start_line === subscription.end_line
+                  ? `${subscription.path}:${subscription.start_line}`
+                  : `${subscription.path}:${subscription.start_line}-${subscription.end_line}`}
+            </code>
+            {subscription.semantic && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  padding: '2px 6px',
+                  borderRadius: 3,
+                  fontSize: 11,
+                  background: '#d1ecf1',
+                  color: '#0c5460',
+                }}
+              >
+                {subscription.semantic.kind}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Label
+          </label>
+          <input
+            type="text"
+            value={label}
+            onChange={e => setLabel(e.target.value)}
+            placeholder="Optional label"
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+            Description
+          </label>
+          <textarea
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Optional description"
+            rows={3}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+        </div>
+
+        {!isEdit && (
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+              Context lines
+            </label>
+            <input
+              type="number"
+              value={context}
+              onChange={e => setContext(parseInt(e.target.value) || 0)}
+              min={0}
+              max={10}
+              style={{ width: 80 }}
+            />
+            <small style={{ color: '#666', marginLeft: 8 }}>
+              Lines before/after for anchors (0-10)
+            </small>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ marginBottom: 20, padding: 12, background: '#f8d7da', color: '#721c24', borderRadius: 4 }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="submit" disabled={saving} style={{ background: '#0066cc', color: 'white', borderColor: '#0066cc' }}>
+            {saving ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create')}
+          </button>
+          <button type="button" onClick={onCancel} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+      </form>
+
+      {showBrowser && (
+        <CodeBrowserModal
+          projectId={projectId}
+          onSelect={handleBrowserSelect}
+          onCancel={() => setShowBrowser(false)}
+        />
+      )}
+    </div>
+  );
+}
+</file>
+
+<file path="frontend/src/types.ts">
+export interface Anchor {
+  context_before: string[];
+  lines: string[];
+  context_after: string[];
+}
+
+export interface SemanticTarget {
+  language: string; // "python"
+  kind: string; // "variable" | "field" | "method"
+  qualname: string; // "API_VERSION" | "User.role" | "Calculator.add"
+  role?: string | null; // "const" for constants, null otherwise
+  interface_hash?: string;
+  body_hash?: string;
+  fingerprint_version?: number;
+}
+
+// Defensive union type accepting both cases (backend uses UPPERCASE, but be tolerant)
+export type ChangeType =
+  | 'STRUCTURAL'
+  | 'CONTENT'
+  | 'MISSING'
+  | 'AMBIGUOUS'
+  | 'PARSE_ERROR'
+  | 'structural'
+  | 'content'
+  | 'missing'
+  | 'ambiguous'
+  | 'parse_error';
+
+export interface Subscription {
+  id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  label: string | null;
+  description: string | null;
+  anchors: Anchor | null;
+  semantic?: SemanticTarget | null; // null/undefined for line-based subscriptions
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubscriptionListResponse {
+  subscriptions: Subscription[];
+  count: number;
+  baseline_ref: string;
+  baseline_title: string;
+}
+
+export interface SubscriptionCreateRequest {
+  location: string;
+  label?: string;
+  description?: string;
+  context?: number;
+}
+
+export interface SubscriptionUpdateRequest {
+  label?: string;
+  description?: string;
+}
+
+export interface ApiError {
+  detail: string;
+  error_type?: string;
+}
+
+export type FilterStatus = 'active' | 'all';
+
+export type View =
+  | 'projects'
+  | 'project-add'
+  | 'list'
+  | 'detail'
+  | 'create'
+  | 'edit'
+  | 'scan'
+  | 'scan-history'
+  | 'scan-detail';
+
+// Project types
+export interface Project {
+  id: string;
+  name: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectStatus {
+  project: Project;
+  path_exists: boolean;
+  codesub_initialized: boolean;
+  subscription_count: number;
+  baseline_ref: string | null;
+}
+
+export interface ProjectCreateRequest {
+  path: string;
+  name?: string;
+}
+
+export interface ProjectListResponse {
+  projects: Project[];
+  count: number;
+}
+
+// Scan types
+export interface Trigger {
+  subscription_id: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  reasons: string[];
+  label: string | null;
+  change_type?: ChangeType | null; // semantic change classification
+  details?: unknown; // Additional semantic details (string, object, or null)
+}
+
+export interface Proposal {
+  subscription_id: string;
+  old_path: string;
+  old_start: number;
+  old_end: number;
+  new_path: string;
+  new_start: number;
+  new_end: number;
+  reasons: string[];
+  confidence: string;
+  shift: number | null;
+  label: string | null;
+  new_qualname?: string | null; // For semantic renames
+  new_kind?: string | null; // For semantic kind changes
+}
+
+export interface ScanResult {
+  base_ref: string;
+  target_ref: string;
+  triggers: Trigger[];
+  proposals: Proposal[];
+}
+
+export interface ScanHistoryEntry {
+  id: string;
+  project_id: string;
+  base_ref: string;
+  target_ref: string;
+  trigger_count: number;
+  proposal_count: number;
+  unchanged_count: number;
+  created_at: string;
+}
+
+export interface ScanHistoryEntryFull extends ScanHistoryEntry {
+  scan_result: ScanResult;
+}
+
+export interface ScanRequest {
+  base_ref: string;
+  target_ref?: string;  // Empty/undefined for working directory
+}
+
+export interface ScanHistoryListResponse {
+  scans: ScanHistoryEntry[];
+  count: number;
+}
+
+export interface ApplyUpdatesRequest {
+  scan_id: string;
+  proposal_ids?: string[];
+}
+
+export interface ApplyUpdatesResponse {
+  applied: string[];
+  warnings: string[];
+  new_baseline: string | null;
+}
+
+// Filesystem browser types
+export interface FilesystemEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+
+export interface FilesystemBrowseResponse {
+  current_path: string;
+  parent_path: string | null;
+  entries: FilesystemEntry[];
+}
+
+// Code browser types
+export interface FileEntry {
+  path: string;
+  name: string;
+  extension: string;
+}
+
+export interface FileListResponse {
+  files: FileEntry[];
+  total: number;
+  has_more: boolean;
+}
+
+export interface FileContentResponse {
+  path: string;
+  total_lines: number;
+  lines: string[];
+  language: string | null;
+  supports_semantic: boolean;
+  truncated: boolean;
+}
+
+export interface ConstructInfo {
+  kind: string;
+  qualname: string;
+  role: string | null;
+  start_line: number;
+  end_line: number;
+  target: string;
+}
+
+export interface SymbolsResponse {
+  path: string;
+  language: string;
+  constructs: ConstructInfo[];
+  has_parse_error: boolean;
+  error_message?: string;
+}
+
+export interface CodeBrowserSelection {
+  type: 'semantic' | 'lines';
+  location: string;
+  label?: string;
+}
+</file>
+
+<file path="src/codesub/api.py">
+"""FastAPI REST API for codesub subscription management."""
+
+from pathlib import Path
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from .config_store import ConfigStore
+from .errors import (
+    CodesubError,
+    ConfigNotFoundError,
+    SubscriptionNotFoundError,
+    InvalidLocationError,
+    InvalidLineRangeError,
+    FileNotFoundAtRefError,
+    InvalidSchemaVersionError,
+    NotAGitRepoError,
+    GitError,
+    ProjectNotFoundError,
+    InvalidProjectPathError,
+    ScanNotFoundError,
+    UnsupportedLanguageError,
+)
+from .git_repo import GitRepo
+from .models import Anchor, Subscription, SemanticTarget
+from .utils import parse_location, extract_anchors, parse_target_spec, LineTarget, SemanticTargetSpec
+from .project_store import ProjectStore
+from .scan_history import ScanHistory
+from .detector import Detector
+from .updater import Updater
+from .update_doc import result_to_dict
+
+
+# --- Pydantic Schemas ---
+
+
+class AnchorSchema(BaseModel):
+    context_before: list[str]
+    lines: list[str]
+    context_after: list[str]
+
+
+class MemberFingerprintSchema(BaseModel):
+    """Schema for container member fingerprint."""
+
+    kind: str
+    interface_hash: str
+    body_hash: str
+
+
+class SemanticTargetSchema(BaseModel):
+    """Schema for semantic subscription target."""
+
+    language: str  # "python"
+    kind: str  # "variable"|"field"|"method"|"class"|"interface"|"enum"
+    qualname: str  # "API_VERSION" | "User.role" | "Calculator.add" | "User"
+    role: Optional[str] = None  # "const" for constants, None otherwise
+    interface_hash: str = ""
+    body_hash: str = ""
+    fingerprint_version: int = 1
+    # Container tracking fields
+    include_members: bool = False
+    include_private: bool = False
+    track_decorators: bool = True
+    baseline_members: Optional[dict[str, MemberFingerprintSchema]] = None
+    baseline_container_qualname: Optional[str] = None
+
+
+class SubscriptionSchema(BaseModel):
+    id: str
+    path: str
+    start_line: int
+    end_line: int
+    label: Optional[str] = None
+    description: Optional[str] = None
+    anchors: Optional[AnchorSchema] = None
+    semantic: Optional[SemanticTargetSchema] = None
+    active: bool = True
+    trigger_on_duplicate: bool = False
+    created_at: str
+    updated_at: str
+
+
+class SubscriptionCreateRequest(BaseModel):
+    """Request body for creating a subscription."""
+
+    location: str = Field(
+        ...,
+        description="Location format: 'path:line' or 'path:start-end' for line-based, "
+        "'path::QualName' or 'path::kind:QualName' for semantic",
+    )
+    label: Optional[str] = None
+    description: Optional[str] = None
+    context: int = Field(default=2, ge=0, le=10)
+    trigger_on_duplicate: bool = Field(
+        default=False,
+        description="For semantic subscriptions: trigger alert if construct found in multiple files"
+    )
+    include_members: bool = Field(
+        default=False,
+        description="For containers (class/enum): track all members and trigger on any change"
+    )
+    include_private: bool = Field(
+        default=False,
+        description="Include private members (_prefixed) when using include_members. Only affects Python."
+    )
+    track_decorators: bool = Field(
+        default=True,
+        description="Track decorator changes on the container (when include_members=True)"
+    )
+
+
+class SubscriptionUpdateRequest(BaseModel):
+    """Request body for updating a subscription."""
+
+    label: Optional[str] = None
+    description: Optional[str] = None
+    trigger_on_duplicate: Optional[bool] = None
+
+
+class SubscriptionListResponse(BaseModel):
+    subscriptions: list[SubscriptionSchema]
+    count: int
+    baseline_ref: str
+    baseline_title: str = ""
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_type: str
+
+
+# --- Project Schemas ---
+
+
+class ProjectSchema(BaseModel):
+    id: str
+    name: str
+    path: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectCreateRequest(BaseModel):
+    path: str = Field(..., description="Absolute path to git repository")
+    name: Optional[str] = Field(None, description="Display name (defaults to dir name)")
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(..., description="New display name")
+
+
+class ProjectListResponse(BaseModel):
+    projects: list[ProjectSchema]
+    count: int
+
+
+class ProjectStatusResponse(BaseModel):
+    project: ProjectSchema
+    path_exists: bool
+    codesub_initialized: bool
+    subscription_count: int
+    baseline_ref: Optional[str]
+
+
+# --- Scan Schemas ---
+
+
+class ScanRequest(BaseModel):
+    base_ref: str = Field(..., description="Base git ref (e.g., 'HEAD~1', 'baseline', commit hash)")
+    target_ref: Optional[str] = Field(default="HEAD", description="Target git ref ('HEAD', commit hash), or empty/null for working directory")
+
+
+class TriggerSchema(BaseModel):
+    subscription_id: str
+    path: str
+    start_line: int
+    end_line: int
+    reasons: list[str]
+    label: Optional[str]
+    change_type: Optional[str] = None  # "STRUCTURAL"|"CONTENT"|"MISSING" for semantic subscriptions
+    details: Optional[dict] = None  # Additional details for semantic triggers
+
+
+class ProposalSchema(BaseModel):
+    subscription_id: str
+    old_path: str
+    old_start: int
+    old_end: int
+    new_path: str
+    new_start: int
+    new_end: int
+    reasons: list[str]
+    confidence: str
+    shift: Optional[int]
+    label: Optional[str]
+    new_qualname: Optional[str] = None  # For semantic subscriptions when construct renamed
+    new_kind: Optional[str] = None  # For semantic subscriptions if kind changed
+
+
+class ScanResultSchema(BaseModel):
+    base_ref: str
+    target_ref: str
+    triggers: list[TriggerSchema]
+    proposals: list[ProposalSchema]
+    unchanged_count: int
+
+
+class ScanHistoryEntrySchema(BaseModel):
+    id: str
+    project_id: str
+    base_ref: str
+    target_ref: str
+    trigger_count: int
+    proposal_count: int
+    unchanged_count: int
+    created_at: str
+
+
+class ScanHistoryListResponse(BaseModel):
+    scans: list[ScanHistoryEntrySchema]
+    count: int
+
+
+class ApplyUpdatesRequest(BaseModel):
+    scan_id: str = Field(..., description="Scan ID to apply proposals from")
+    proposal_ids: Optional[list[str]] = Field(
+        None,
+        description="Specific proposal IDs to apply (all if not specified)"
+    )
+
+
+class ApplyUpdatesResponse(BaseModel):
+    applied: list[str]
+    warnings: list[str]
+    new_baseline: Optional[str]
+
+
+# --- Filesystem Browser Schemas ---
+
+
+class FilesystemEntry(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+
+
+class FilesystemBrowseResponse(BaseModel):
+    current_path: str
+    parent_path: Optional[str]
+    entries: list[FilesystemEntry]
+
+
+# --- Code Browser Schemas ---
+
+
+class FileEntry(BaseModel):
+    """A file in the repository."""
+    path: str  # Repo-relative path (e.g., "src/codesub/api.py")
+    name: str  # Filename only (e.g., "api.py")
+    extension: str  # File extension (e.g., ".py")
+
+
+class FileListResponse(BaseModel):
+    """Response for file listing."""
+    files: list[FileEntry]
+    total: int
+    has_more: bool
+
+
+class FileContentResponse(BaseModel):
+    """Response for file content."""
+    path: str
+    total_lines: int
+    lines: list[str]  # Line contents (frontend adds line numbers)
+    language: Optional[str] = None
+    supports_semantic: bool = False
+    truncated: bool = False
+
+
+class ConstructSchema(BaseModel):
+    """A semantic construct in the file."""
+    kind: str
+    qualname: str
+    role: Optional[str] = None
+    start_line: int
+    end_line: int
+    target: str  # Ready-to-use location string
+
+
+class SymbolsResponse(BaseModel):
+    """Response for file symbols."""
+    path: str
+    language: str
+    constructs: list[ConstructSchema]
+    has_parse_error: bool = False
+    error_message: Optional[str] = None
+
+
+# --- Code Browser Cache ---
+
+# Cache file lists per (project_id, baseline_ref) for 60 seconds
+_file_list_cache: dict[tuple[str, str], tuple[list[str], float]] = {}
+_FILE_LIST_CACHE_TTL = 60.0
+
+# Common code/text file extensions
+TEXT_EXTENSIONS = {
+    ".py", ".java", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".php",
+    ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala", ".clj",
+    ".html", ".css", ".scss", ".sass", ".less", ".json", ".yaml", ".yml",
+    ".xml", ".toml", ".ini", ".cfg", ".conf", ".md", ".txt", ".rst", ".sql",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+    ".dockerfile", ".vue", ".svelte", ".astro", ".prisma", ".graphql",
+}
+
+
+# --- Helper Functions ---
+
+
+def get_project_store() -> ProjectStore:
+    """Get the global ProjectStore."""
+    return ProjectStore()
+
+
+def get_scan_history() -> ScanHistory:
+    """Get the global ScanHistory."""
+    return ScanHistory()
+
+
+def get_project_store_and_repo(project_id: str) -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for a specific project."""
+    project_store = get_project_store()
+    project = project_store.get_project(project_id)
+
+    repo = GitRepo(project.path)
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
+    """Get ConfigStore and GitRepo for the current directory."""
+    repo = GitRepo()
+    store = ConfigStore(repo.root)
+    return store, repo
+
+
+def subscription_to_schema(sub: Subscription) -> SubscriptionSchema:
+    """Convert dataclass Subscription to Pydantic schema."""
+    anchors = None
+    if sub.anchors:
+        anchors = AnchorSchema(
+            context_before=sub.anchors.context_before,
+            lines=sub.anchors.lines,
+            context_after=sub.anchors.context_after,
+        )
+    semantic = None
+    if sub.semantic:
+        semantic = SemanticTargetSchema(
+            language=sub.semantic.language,
+            kind=sub.semantic.kind,
+            qualname=sub.semantic.qualname,
+            role=sub.semantic.role,
+            interface_hash=sub.semantic.interface_hash,
+            body_hash=sub.semantic.body_hash,
+            fingerprint_version=sub.semantic.fingerprint_version,
+        )
+    return SubscriptionSchema(
+        id=sub.id,
+        path=sub.path,
+        start_line=sub.start_line,
+        end_line=sub.end_line,
+        label=sub.label,
+        description=sub.description,
+        anchors=anchors,
+        semantic=semantic,
+        active=sub.active,
+        trigger_on_duplicate=sub.trigger_on_duplicate,
+        created_at=sub.created_at,
+        updated_at=sub.updated_at,
+    )
+
+
+def _create_subscription_from_request(
+    store: ConfigStore,
+    repo: GitRepo,
+    baseline: str,
+    request: SubscriptionCreateRequest,
+) -> Subscription:
+    """Create a subscription from a request, handling both line-based and semantic targets."""
+    from .semantic import get_indexer_for_path
+
+    target = parse_target_spec(request.location)
+
+    if isinstance(target, SemanticTargetSpec):
+        # Semantic subscription
+        from .models import CONTAINER_KINDS, MemberFingerprint
+
+        lines = repo.show_file(baseline, target.path)
+        source = "\n".join(lines)
+
+        language, indexer = get_indexer_for_path(target.path)
+        construct = indexer.find_construct(
+            source, target.path, target.qualname, target.kind
+        )
+        if construct is None:
+            raise InvalidLocationError(
+                request.location,
+                f"Construct '{target.qualname}' not found. Use 'codesub symbols' to discover valid targets.",
+            )
+
+        # Handle container tracking flags
+        include_members = request.include_members
+        include_private = request.include_private
+        track_decorators = request.track_decorators
+        baseline_members = None
+        baseline_container_qualname = None
+
+        if include_members:
+            # Validate container kind
+            valid_kinds = CONTAINER_KINDS.get(language, set())
+            if construct.kind not in valid_kinds:
+                raise InvalidLocationError(
+                    request.location,
+                    f"--include-members only valid for: {', '.join(sorted(valid_kinds))}. "
+                    f"'{construct.qualname}' is a {construct.kind}.",
+                )
+
+            # Store baseline container qualname
+            baseline_container_qualname = construct.qualname
+
+            # Index file once and capture member fingerprints with relative IDs
+            all_constructs = indexer.index_file(source, target.path)
+            members = indexer.get_container_members(
+                source, target.path, construct.qualname, include_private,
+                constructs=all_constructs
+            )
+            baseline_members = {}
+            for m in members:
+                # Store by relative member ID
+                relative_id = m.qualname[len(construct.qualname) + 1:]
+                baseline_members[relative_id] = MemberFingerprint(
+                    kind=m.kind,
+                    interface_hash=m.interface_hash,
+                    body_hash=m.body_hash,
+                )
+
+        # Extract anchors from construct lines
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, construct.start_line, construct.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        # Create semantic target with container flags
+        semantic = SemanticTarget(
+            language=language,
+            kind=construct.kind,
+            qualname=construct.qualname,
+            role=construct.role,
+            interface_hash=construct.interface_hash,
+            body_hash=construct.body_hash,
+            include_members=include_members,
+            include_private=include_private,
+            track_decorators=track_decorators,
+            baseline_members=baseline_members,
+            baseline_container_qualname=baseline_container_qualname,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=construct.start_line,
+            end_line=construct.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+            semantic=semantic,
+            trigger_on_duplicate=request.trigger_on_duplicate,
+        )
+    else:
+        # Line-based subscription
+        lines = repo.show_file(baseline, target.path)
+
+        # Validate line range
+        if target.end_line > len(lines):
+            raise InvalidLineRangeError(
+                target.start_line,
+                target.end_line,
+                f"exceeds file length ({len(lines)} lines)",
+            )
+
+        # Extract anchors
+        context_before, watched_lines, context_after = extract_anchors(
+            lines, target.start_line, target.end_line, context=request.context
+        )
+        anchors = Anchor(
+            context_before=context_before,
+            lines=watched_lines,
+            context_after=context_after,
+        )
+
+        return Subscription.create(
+            path=target.path,
+            start_line=target.start_line,
+            end_line=target.end_line,
+            label=request.label,
+            description=request.description,
+            anchors=anchors,
+        )
+
+
+# --- FastAPI App ---
+
+
+app = FastAPI(
+    title="codesub API",
+    description="REST API for managing code subscriptions",
+    version="0.1.0",
+)
+
+# CORS for local development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# --- Global Exception Handler ---
+
+
+# Map exception types to HTTP status codes
+ERROR_STATUS_CODES: dict[type, int] = {
+    ConfigNotFoundError: 409,
+    SubscriptionNotFoundError: 404,
+    InvalidLocationError: 400,
+    InvalidLineRangeError: 400,
+    FileNotFoundAtRefError: 404,
+    InvalidSchemaVersionError: 500,
+    NotAGitRepoError: 500,
+    GitError: 500,
+    ProjectNotFoundError: 404,
+    InvalidProjectPathError: 400,
+    ScanNotFoundError: 404,
+    UnsupportedLanguageError: 400,
+}
+
+
+@app.exception_handler(CodesubError)
+async def codesub_error_handler(request: Request, exc: CodesubError) -> JSONResponse:
+    """Map CodesubError subclasses to appropriate HTTP responses."""
+    status_code = ERROR_STATUS_CODES.get(type(exc), 500)
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": str(exc), "error_type": type(exc).__name__},
+    )
+
+
+# --- Endpoints ---
+
+
+@app.get("/api/subscriptions", response_model=SubscriptionListResponse)
+def list_subscriptions(include_inactive: bool = Query(default=False)):
+    """List all subscriptions, optionally including inactive ones."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.get("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_subscription(sub_id: str):
+    """Get a single subscription by ID (supports partial ID matching)."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_subscription(request: SubscriptionCreateRequest):
+    """Create a new subscription (line-based or semantic)."""
+    store, repo = get_store_and_repo()
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description.
+
+    PATCH semantics:
+    - Omitted field: keep existing value
+    - Empty string "": clear to null
+    - Explicit null: clear to null
+    """
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    # Get the fields that were actually sent in the request
+    update_data = request.model_dump(exclude_unset=True)
+
+    # Update fields if provided
+    if "label" in update_data:
+        # Empty string becomes None
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        # Empty string becomes None
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_subscription(sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_subscription(sub_id: str):
+    """Reactivate a deactivated subscription."""
+    store, _ = get_store_and_repo()
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint. Always returns 200."""
+    try:
+        store, repo = get_store_and_repo()
+        config_exists = store.exists()
+        baseline_ref = None
+        if config_exists:
+            config = store.load()
+            baseline_ref = config.repo.baseline_ref
+        return {
+            "status": "ok",
+            "config_initialized": config_exists,
+            "repo_root": str(repo.root),
+            "baseline_ref": baseline_ref,
+        }
+    except NotAGitRepoError:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": "Not running in a git repository",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "config_initialized": False,
+            "detail": str(e),
+        }
+
+
+# --- Project Endpoints ---
+
+
+@app.get("/api/projects", response_model=ProjectListResponse)
+def list_projects():
+    """List all registered projects."""
+    store = get_project_store()
+    projects = store.list_projects()
+    return ProjectListResponse(
+        projects=[ProjectSchema(**p.to_dict()) for p in projects],
+        count=len(projects),
+    )
+
+
+@app.post("/api/projects", response_model=ProjectSchema, status_code=201)
+def create_project(request: ProjectCreateRequest):
+    """Register a new project."""
+    store = get_project_store()
+    project = store.add_project(path=request.path, name=request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.get("/api/projects/{project_id}", response_model=ProjectStatusResponse)
+def get_project_status(project_id: str):
+    """Get project details and status."""
+    store = get_project_store()
+    status = store.get_project_status(project_id)
+    return ProjectStatusResponse(
+        project=ProjectSchema(**status["project"]),
+        path_exists=status["path_exists"],
+        codesub_initialized=status["codesub_initialized"],
+        subscription_count=status["subscription_count"],
+        baseline_ref=status["baseline_ref"],
+    )
+
+
+@app.patch("/api/projects/{project_id}", response_model=ProjectSchema)
+def update_project(project_id: str, request: ProjectUpdateRequest):
+    """Update project name."""
+    store = get_project_store()
+    project = store.update_project(project_id, request.name)
+    return ProjectSchema(**project.to_dict())
+
+
+@app.delete("/api/projects/{project_id}", response_model=ProjectSchema)
+def delete_project(project_id: str):
+    """Remove a project from the registry."""
+    store = get_project_store()
+    project = store.remove_project(project_id)
+    return ProjectSchema(**project.to_dict())
+
+
+# --- Project Subscriptions Endpoints ---
+
+
+@app.get("/api/projects/{project_id}/subscriptions", response_model=SubscriptionListResponse)
+def list_project_subscriptions(
+    project_id: str,
+    include_inactive: bool = Query(default=False)
+):
+    """List subscriptions for a specific project."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    subs = store.list_subscriptions(include_inactive=include_inactive)
+    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
+    return SubscriptionListResponse(
+        subscriptions=[subscription_to_schema(s) for s in subs],
+        count=len(subs),
+        baseline_ref=config.repo.baseline_ref,
+        baseline_title=baseline_title,
+    )
+
+
+@app.post("/api/projects/{project_id}/subscriptions", response_model=SubscriptionSchema, status_code=201)
+def create_project_subscription(project_id: str, request: SubscriptionCreateRequest):
+    """Create a new subscription in a specific project (line-based or semantic)."""
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    sub = _create_subscription_from_request(store, repo, baseline, request)
+    store.add_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.get("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def get_project_subscription(project_id: str, sub_id: str):
+    """Get a single subscription by ID within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+    return subscription_to_schema(sub)
+
+
+@app.patch("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def update_project_subscription(project_id: str, sub_id: str, request: SubscriptionUpdateRequest):
+    """Update subscription label and/or description within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    update_data = request.model_dump(exclude_unset=True)
+
+    if "label" in update_data:
+        sub.label = request.label if request.label else None
+    if "description" in update_data:
+        sub.description = request.description if request.description else None
+    if "trigger_on_duplicate" in update_data:
+        sub.trigger_on_duplicate = request.trigger_on_duplicate
+
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+@app.delete("/api/projects/{project_id}/subscriptions/{sub_id}", response_model=SubscriptionSchema)
+def delete_project_subscription(project_id: str, sub_id: str, hard: bool = Query(default=False)):
+    """Delete (deactivate or hard delete) a subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.remove_subscription(sub_id, hard=hard)
+    return subscription_to_schema(sub)
+
+
+@app.post("/api/projects/{project_id}/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
+def reactivate_project_subscription(project_id: str, sub_id: str):
+    """Reactivate a deactivated subscription within a project."""
+    store, _ = get_project_store_and_repo(project_id)
+    sub = store.get_subscription(sub_id)
+
+    if sub.active:
+        raise HTTPException(status_code=400, detail="Subscription is already active")
+
+    sub.active = True
+    store.update_subscription(sub)
+    return subscription_to_schema(sub)
+
+
+# --- Scan Endpoints ---
+
+
+@app.post("/api/projects/{project_id}/scan", response_model=ScanHistoryEntrySchema)
+def run_project_scan(project_id: str, request: ScanRequest):
+    """
+    Run a scan for a project and save to history.
+
+    Special ref values:
+    - "baseline": Use project's configured baseline ref
+    - "HEAD~N": N commits back from HEAD
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+
+    # Resolve refs
+    base_ref = request.base_ref
+    target_ref = request.target_ref
+
+    # Handle special values
+    if base_ref == "baseline":
+        base_ref = config.repo.baseline_ref
+
+    # Resolve to commit hashes (empty target_ref means working directory)
+    base_ref = repo.resolve_ref(base_ref)
+    if target_ref:
+        target_ref = repo.resolve_ref(target_ref)
+    else:
+        target_ref = None  # Working directory
+
+    # Run scan
+    detector = Detector(repo)
+    result = detector.scan(config.subscriptions, base_ref, target_ref)
+
+    # Convert to dict and save to history
+    result_dict = result_to_dict(result)
+    history = get_scan_history()
+    entry = history.save_scan(project_id, result_dict)
+
+    return ScanHistoryEntrySchema(
+        id=entry.id,
+        project_id=entry.project_id,
+        base_ref=entry.base_ref,
+        target_ref=entry.target_ref,
+        trigger_count=entry.trigger_count,
+        proposal_count=entry.proposal_count,
+        unchanged_count=entry.unchanged_count,
+        created_at=entry.created_at,
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history", response_model=ScanHistoryListResponse)
+def list_scan_history(
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100)
+):
+    """List scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entries = history.list_scans(project_id, limit=limit)
+
+    return ScanHistoryListResponse(
+        scans=[
+            ScanHistoryEntrySchema(
+                id=e.id,
+                project_id=e.project_id,
+                base_ref=e.base_ref,
+                target_ref=e.target_ref,
+                trigger_count=e.trigger_count,
+                proposal_count=e.proposal_count,
+                unchanged_count=e.unchanged_count,
+                created_at=e.created_at,
+            )
+            for e in entries
+        ],
+        count=len(entries),
+    )
+
+
+@app.get("/api/projects/{project_id}/scan-history/{scan_id}")
+def get_scan_result(project_id: str, scan_id: str):
+    """Get a specific scan result with full details."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    entry = history.get_scan(project_id, scan_id)
+
+    return entry.to_dict()
+
+
+@app.delete("/api/projects/{project_id}/scan-history")
+def clear_project_scan_history(project_id: str):
+    """Clear all scan history for a project."""
+    # Validate project exists
+    project_store = get_project_store()
+    _ = project_store.get_project(project_id)
+
+    history = get_scan_history()
+    count = history.clear_project_history(project_id)
+
+    return {"deleted": count}
+
+
+@app.delete("/api/scan-history")
+def clear_all_scan_history():
+    """Clear all scan history for all projects."""
+    history = get_scan_history()
+    count = history.clear_all_history()
+
+    return {"deleted": count}
+
+
+# --- Apply Updates Endpoint ---
+
+
+@app.post("/api/projects/{project_id}/apply-updates", response_model=ApplyUpdatesResponse)
+def apply_project_updates(project_id: str, request: ApplyUpdatesRequest):
+    """
+    Apply proposals from a scan result.
+
+    Updates subscriptions and advances baseline to the scan's target_ref.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+
+    # Get the scan result
+    history = get_scan_history()
+    entry = history.get_scan(project_id, request.scan_id)
+    scan_result = entry.scan_result
+
+    # Filter proposals if specific IDs requested
+    proposals = scan_result.get("proposals", [])
+    if request.proposal_ids:
+        proposals = [p for p in proposals if p["subscription_id"] in request.proposal_ids]
+
+    # Build update document format
+    update_data = {
+        "target_ref": scan_result.get("target_ref", ""),
+        "proposals": proposals,
+    }
+
+    # Apply updates
+    updater = Updater(store, repo)
+    applied, warnings = updater.apply(update_data)
+
+    return ApplyUpdatesResponse(
+        applied=applied,
+        warnings=warnings,
+        new_baseline=scan_result.get("target_ref") if applied else None,
+    )
+
+
+# --- Filesystem Browser Endpoint ---
+
+
+@app.get("/api/filesystem/browse", response_model=FilesystemBrowseResponse)
+def browse_filesystem(path: str = Query(default="~", description="Path to browse")):
+    """
+    Browse filesystem directories.
+
+    Used by the frontend to provide a file picker for selecting project paths.
+    Returns directories (not files) sorted alphabetically, with hidden dirs excluded.
+    Restricted to user's home directory for security.
+    """
+    home = Path.home().resolve()
+
+    # Expand ~ and resolve path
+    try:
+        expanded = Path(path).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {path}")
+
+    # Security: restrict to home directory
+    try:
+        expanded.relative_to(home)
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access restricted to home directory ({home})"
+        )
+
+    if not expanded.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {path}")
+
+    if not expanded.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+
+    # Get parent path (None if at home directory)
+    if expanded == home:
+        parent_path = None
+    else:
+        parent = expanded.parent
+        # Ensure parent is still within home
+        try:
+            parent.relative_to(home)
+            parent_path = str(parent)
+        except ValueError:
+            parent_path = None
+
+    # List directory entries (directories only, exclude hidden)
+    entries: list[FilesystemEntry] = []
+    try:
+        for item in sorted(expanded.iterdir(), key=lambda p: p.name.lower()):
+            try:
+                # Skip hidden directories
+                if item.name.startswith("."):
+                    continue
+                # Skip symlinks to avoid escaping home directory
+                if item.is_symlink():
+                    continue
+                if item.is_dir():
+                    entries.append(
+                        FilesystemEntry(
+                            name=item.name,
+                            path=str(item),
+                            is_dir=True,
+                        )
+                    )
+            except OSError:
+                # Skip entries that can't be inspected (broken symlinks, etc.)
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+
+    return FilesystemBrowseResponse(
+        current_path=str(expanded),
+        parent_path=parent_path,
+        entries=entries,
+    )
+
+
+# --- Code Browser Endpoints ---
+
+
+def _get_cached_file_list(project_id: str, baseline: str, repo: GitRepo) -> list[str]:
+    """Get file list from cache or fetch from git."""
+    from time import time
+    cache_key = (project_id, baseline)
+    now = time()
+
+    if cache_key in _file_list_cache:
+        files, cached_at = _file_list_cache[cache_key]
+        if now - cached_at < _FILE_LIST_CACHE_TTL:
+            return files
+
+    files = repo.list_files(baseline)
+    _file_list_cache[cache_key] = (files, now)
+    return files
+
+
+MAX_FILE_LINES = 5000  # Hard limit for browser display
+
+
+@app.get("/api/projects/{project_id}/files", response_model=FileListResponse)
+def list_project_files(
+    project_id: str,
+    search: Optional[str] = Query(None, description="Filter by path substring"),
+    extensions: Optional[str] = Query(None, description="Comma-separated extensions (e.g., '.py,.java')"),
+    text_only: bool = Query(default=True, description="Only show common text/code files"),
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    List git-tracked files in a project at the baseline ref.
+
+    By default, filters to common code/text file extensions.
+    Results are sorted alphabetically by path.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get cached file list
+    files = _get_cached_file_list(project_id, baseline, repo)
+
+    # Apply text_only filter (default)
+    if text_only and not extensions:
+        files = [f for f in files if Path(f).suffix.lower() in TEXT_EXTENSIONS]
+
+    # Apply extension filter if specified
+    if extensions:
+        ext_list = [e.strip().lower() for e in extensions.split(",")]
+        ext_list = ["." + e if not e.startswith(".") else e for e in ext_list]
+        files = [f for f in files if Path(f).suffix.lower() in ext_list]
+
+    # Apply search filter
+    if search:
+        search_lower = search.lower()
+        files = [f for f in files if search_lower in f.lower()]
+
+    # Sort and paginate
+    files.sort()
+    total = len(files)
+    paginated = files[offset:offset + limit]
+
+    return FileListResponse(
+        files=[
+            FileEntry(
+                path=f,
+                name=Path(f).name,
+                extension=Path(f).suffix.lower(),
+            )
+            for f in paginated
+        ],
+        total=total,
+        has_more=(offset + len(paginated)) < total,
+    )
+
+
+@app.get("/api/projects/{project_id}/file-content", response_model=FileContentResponse)
+def get_project_file_content(
+    project_id: str,
+    path: str = Query(..., description="Repo-relative file path"),
+):
+    """
+    Get file content at the project's baseline ref.
+
+    Returns up to 5000 lines. Files larger than this are truncated with a warning.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get file content
+    try:
+        all_lines = repo.show_file(baseline, path)
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Cannot display binary or non-UTF8 file: {path}"
+        )
+
+    total_lines = len(all_lines)
+    truncated = total_lines > MAX_FILE_LINES
+    lines = all_lines[:MAX_FILE_LINES] if truncated else all_lines
+
+    # Detect language support
+    from .semantic import get_indexer_for_path
+    language = None
+    supports_semantic = False
+    try:
+        language, _ = get_indexer_for_path(path)
+        supports_semantic = True
+    except UnsupportedLanguageError:
+        pass
+
+    return FileContentResponse(
+        path=path,
+        total_lines=total_lines,
+        lines=lines,
+        language=language,
+        supports_semantic=supports_semantic,
+        truncated=truncated,
+    )
+
+
+@app.get("/api/projects/{project_id}/file-symbols", response_model=SymbolsResponse)
+def get_project_file_symbols(
+    project_id: str,
+    path: str = Query(..., description="Repo-relative file path"),
+    kind: Optional[str] = Query(None, description="Filter by construct kind"),
+):
+    """
+    Get semantic constructs in a file.
+
+    Only works for supported languages (Python, Java).
+    Returns all discoverable constructs with their line ranges.
+    """
+    store, repo = get_project_store_and_repo(project_id)
+    config = store.load()
+    baseline = config.repo.baseline_ref
+
+    # Get file content
+    lines = repo.show_file(baseline, path)
+    source = "\n".join(lines)
+
+    # Get indexer
+    from .semantic import get_indexer_for_path
+    language, indexer = get_indexer_for_path(path)
+
+    # Index file with error handling
+    try:
+        constructs = indexer.index_file(source, path)
+    except Exception as e:
+        return SymbolsResponse(
+            path=path,
+            language=language,
+            constructs=[],
+            has_parse_error=True,
+            error_message=f"Failed to parse file: {e}",
+        )
+
+    # Filter by kind if specified
+    if kind:
+        constructs = [c for c in constructs if c.kind == kind]
+
+    # Check for parse errors in constructs
+    has_parse_error = any(c.has_parse_error for c in constructs)
+
+    return SymbolsResponse(
+        path=path,
+        language=language,
+        constructs=[
+            ConstructSchema(
+                kind=c.kind,
+                qualname=c.qualname,
+                role=c.role,
+                start_line=c.start_line,
+                end_line=c.end_line,
+                target=f"{path}::{c.qualname}",
+            )
+            for c in constructs
+        ],
+        has_parse_error=has_parse_error,
+    )
+</file>
+
+</files>
