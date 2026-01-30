@@ -17,6 +17,7 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
 
   const [location, setLocation] = useState('');
   const [label, setLabel] = useState(subscription?.label || '');
+  const [labelAutoFilled, setLabelAutoFilled] = useState(false);
   const [description, setDescription] = useState(subscription?.description || '');
   const [context, setContext] = useState(2);
   const [saving, setSaving] = useState(false);
@@ -39,8 +40,10 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
 
   const handleBrowserSelect = (selection: CodeBrowserSelection) => {
     setLocation(selection.location);
-    if (selection.label && !label) {
+    // Update label if it was auto-filled or is empty
+    if (selection.label && (labelAutoFilled || !label)) {
       setLabel(selection.label);
+      setLabelAutoFilled(true);
     }
     // Reset container options if switching to non-container
     if (!isContainerKind(selection.kind)) {
@@ -282,7 +285,7 @@ export function SubscriptionForm({ subscription, projectId, onCancel, onSaved, s
           <input
             type="text"
             value={label}
-            onChange={e => setLabel(e.target.value)}
+            onChange={e => { setLabel(e.target.value); setLabelAutoFilled(false); }}
             placeholder="Optional label"
             style={{ width: '100%' }}
           />
