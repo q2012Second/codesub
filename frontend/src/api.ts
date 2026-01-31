@@ -30,25 +30,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json();
 }
 
-export async function listSubscriptions(includeInactive: boolean = false): Promise<SubscriptionListResponse> {
-  const url = `${API_BASE}/subscriptions?include_inactive=${includeInactive}`;
-  const response = await fetch(url);
-  return handleResponse<SubscriptionListResponse>(response);
-}
-
-export async function getSubscription(id: string): Promise<Subscription> {
-  const response = await fetch(`${API_BASE}/subscriptions/${id}`);
-  return handleResponse<Subscription>(response);
-}
-
-export async function createSubscription(data: SubscriptionCreateRequest): Promise<Subscription> {
-  const response = await fetch(`${API_BASE}/subscriptions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  return handleResponse<Subscription>(response);
-}
+// --- Project Subscriptions ---
 
 export async function createProjectSubscription(
   projectId: string,
@@ -56,15 +38,6 @@ export async function createProjectSubscription(
 ): Promise<Subscription> {
   const response = await fetch(`${API_BASE}/projects/${projectId}/subscriptions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
-  return handleResponse<Subscription>(response);
-}
-
-export async function updateSubscription(id: string, data: SubscriptionUpdateRequest): Promise<Subscription> {
-  const response = await fetch(`${API_BASE}/subscriptions/${id}`, {
-    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
@@ -84,12 +57,6 @@ export async function updateProjectSubscription(
   return handleResponse<Subscription>(response);
 }
 
-export async function deleteSubscription(id: string, hard: boolean = false): Promise<Subscription> {
-  const url = `${API_BASE}/subscriptions/${id}?hard=${hard}`;
-  const response = await fetch(url, { method: 'DELETE' });
-  return handleResponse<Subscription>(response);
-}
-
 export async function deleteProjectSubscription(
   projectId: string,
   id: string,
@@ -97,13 +64,6 @@ export async function deleteProjectSubscription(
 ): Promise<Subscription> {
   const url = `${API_BASE}/projects/${projectId}/subscriptions/${id}?hard=${hard}`;
   const response = await fetch(url, { method: 'DELETE' });
-  return handleResponse<Subscription>(response);
-}
-
-export async function reactivateSubscription(id: string): Promise<Subscription> {
-  const response = await fetch(`${API_BASE}/subscriptions/${id}/reactivate`, {
-    method: 'POST',
-  });
   return handleResponse<Subscription>(response);
 }
 
@@ -117,7 +77,7 @@ export async function reactivateProjectSubscription(
   return handleResponse<Subscription>(response);
 }
 
-export async function healthCheck(): Promise<{ status: string; config_initialized: boolean; baseline_ref?: string }> {
+export async function healthCheck(): Promise<{ status: string; project_count?: number; detail?: string }> {
   const response = await fetch(`${API_BASE}/health`);
   return response.json();
 }
@@ -149,8 +109,6 @@ export async function deleteProject(projectId: string): Promise<Project> {
   });
   return handleResponse<Project>(response);
 }
-
-// --- Project Subscriptions ---
 
 export async function listProjectSubscriptions(
   projectId: string,

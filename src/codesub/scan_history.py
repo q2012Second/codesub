@@ -1,6 +1,7 @@
 """Scan history storage for codesub."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,9 @@ from .errors import ScanNotFoundError
 from .models import ScanHistoryEntry, _generate_id, _utc_now
 
 # Local data directory within the codesub project
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+# Can be overridden via CODESUB_DATA_DIR environment variable
+_default_data_dir = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(os.environ.get("CODESUB_DATA_DIR", _default_data_dir))
 SCAN_HISTORY_DIR = "scan_history"
 
 

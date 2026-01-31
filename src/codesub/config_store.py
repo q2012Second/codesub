@@ -2,9 +2,9 @@
 
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
 
 from .errors import (
     ConfigExistsError,
@@ -14,26 +14,78 @@ from .errors import (
 )
 from .models import Config, Subscription, _utc_now
 
+import os
+
 SCHEMA_VERSION = 1
-CONFIG_DIR = ".codesub"
+
+# Centralized storage constants
+# Can be overridden via CODESUB_DATA_DIR environment variable
+_default_data_dir = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(os.environ.get("CODESUB_DATA_DIR", _default_data_dir))
+SUBSCRIPTIONS_DIR = "subscriptions"
 CONFIG_FILE = "subscriptions.json"
 UPDATE_DOCS_DIR = "last_update_docs"
+
+# Legacy storage constants (for migration)
+LEGACY_CONFIG_DIR = ".codesub"
 
 
 class ConfigStore:
     """Manages reading and writing the subscription configuration."""
 
-    def __init__(self, repo_root: Path):
+    def __init__(self, project_id: str, config_dir: Path | None = None):
         """
         Initialize ConfigStore.
 
         Args:
-            repo_root: Path to the repository root directory.
+            project_id: The project ID (used as storage key).
+            config_dir: Override base config directory (for testing).
         """
-        self.repo_root = repo_root
-        self.config_dir = repo_root / CONFIG_DIR
+        self.project_id = project_id
+        self._base_dir = config_dir or DATA_DIR
+        self.config_dir = self._base_dir / SUBSCRIPTIONS_DIR / project_id
         self.config_path = self.config_dir / CONFIG_FILE
         self.update_docs_dir = self.config_dir / UPDATE_DOCS_DIR
+        self._repo_root: Path | None = None
+
+    def set_repo_root(self, repo_root: Path) -> None:
+        """
+        Set repo root for migration and path operations.
+
+        This triggers auto-migration from legacy .codesub/ location if needed.
+        """
+        self._repo_root = repo_root
+        self._try_migrate(repo_root)
+
+    def _get_legacy_path(self, repo_root: Path) -> Path:
+        """Get legacy .codesub config path for migration."""
+        return repo_root / LEGACY_CONFIG_DIR / CONFIG_FILE
+
+    def _try_migrate(self, repo_root: Path) -> bool:
+        """
+        Attempt to migrate from legacy .codesub/ location.
+
+        Returns True if migration occurred, False otherwise.
+        """
+        if self.config_path.exists():
+            return False  # Already migrated or initialized
+
+        legacy_path = self._get_legacy_path(repo_root)
+        if not legacy_path.exists():
+            return False  # No legacy config to migrate
+
+        # Perform migration
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy config file
+        shutil.copy2(legacy_path, self.config_path)
+
+        # Copy update_docs if present
+        legacy_docs = legacy_path.parent / UPDATE_DOCS_DIR
+        if legacy_docs.exists():
+            shutil.copytree(legacy_docs, self.update_docs_dir, dirs_exist_ok=True)
+
+        return True
 
     def exists(self) -> bool:
         """Check if config file exists."""
@@ -92,6 +144,8 @@ class ConfigStore:
     def init(self, baseline_ref: str, force: bool = False) -> Config:
         """
         Initialize a new configuration.
+
+        Called automatically when a project is registered.
 
         Args:
             baseline_ref: The baseline git ref (usually HEAD).

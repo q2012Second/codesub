@@ -249,17 +249,18 @@ tasks:
       - npm run build
 
   # =============================================================================
-  # CODESUB OPERATIONS - Init & Subscriptions
+  # CODESUB OPERATIONS - Projects & Subscriptions
   # =============================================================================
-  codesub:init:
-    desc: "Initialize codesub in a target project"
+  codesub:register:
+    desc: "Register a project with codesub"
     summary: |
-      Initialize codesub in the specified project directory.
+      Register a git repository as a codesub project. This auto-initializes
+      the subscription config with HEAD as the baseline.
 
       Usage:
-        task codesub:init -- /path/to/project
-        task codesub:init TARGET=/path/to/project
-        task codesub:init -- /path/to/project --baseline main
+        task codesub:register -- /path/to/project
+        task codesub:register TARGET=/path/to/project
+        task codesub:register -- /path/to/project --name "My Project"
     vars:
       TARGET: '{{.TARGET | default "."}}'
       _FIRST_ARG:
@@ -287,9 +288,8 @@ tasks:
           else
             echo "$rest"
           fi
-    dir: '{{._TARGET_DIR}}'
     cmds:
-      - '{{.CODESUB}} init {{._EXTRA_ARGS}}'
+      - '{{.CODESUB}} projects add {{._TARGET_DIR}} {{._EXTRA_ARGS}}'
 
   codesub:add:
     desc: "Add a new subscription"

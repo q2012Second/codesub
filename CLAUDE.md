@@ -61,7 +61,6 @@ task mock:init
 ### Codesub Operations
 | Task | Description |
 |------|-------------|
-| `task codesub:init TARGET=path` | Initialize codesub in target project |
 | `task codesub:add TARGET=path -- file:10-20` | Add subscription |
 | `task codesub:list TARGET=path` | List subscriptions |
 | `task codesub:clean` | Remove all projects, subscriptions, and history |
@@ -84,7 +83,7 @@ src/codesub/
 ├── cli.py            # CLI interface (argparse)
 ├── api.py            # FastAPI REST API server
 ├── models.py         # Data models (Subscription, SemanticTarget, Anchor, Config, Project)
-├── config_store.py   # Per-project JSON config management (.codesub/)
+├── config_store.py   # Per-project JSON config management (data/subscriptions/)
 ├── project_store.py  # Multi-project registration (data/projects.json)
 ├── scan_history.py   # Scan history storage (data/scan_history/)
 ├── git_repo.py       # Git wrapper
@@ -108,16 +107,18 @@ mock_repos/           # Mock repositories for testing
 ├── python/           # Python e-commerce API (run `task mock:init:python`)
 └── java/             # Java e-commerce API (run `task mock:init:java`)
 tests/                # Test suite (pytest, 260+ tests)
-data/                 # Local server data (gitignored)
+data/                 # Local data directory (gitignored)
 ├── projects.json     # Registered projects
+├── subscriptions/    # Per-project subscription config
+│   └── <project_id>/ # subscriptions.json per project
 └── scan_history/     # Scan results per project
 ```
 
 ## CLI Usage
 
 ```bash
-# Initialize in a git repo
-codesub init
+# Register a git repo (auto-initializes config)
+codesub projects add .
 
 # Subscribe to a line range
 codesub add path/to/file.py:42-50 --label "Important function"
@@ -179,21 +180,22 @@ Semantic subscriptions track code constructs by identity using Tree-sitter parsi
 
 ## API Endpoints
 
-### Subscriptions (per-project, uses local .codesub/)
-- `GET /api/subscriptions` - List subscriptions
-- `POST /api/subscriptions` - Create subscription
-- `GET /api/subscriptions/{id}` - Get subscription
-- `PATCH /api/subscriptions/{id}` - Update subscription
-- `DELETE /api/subscriptions/{id}` - Delete subscription
-- `POST /api/subscriptions/{id}/reactivate` - Reactivate
-
-### Projects (multi-project management)
+### Projects
 - `GET /api/projects` - List all registered projects
-- `POST /api/projects` - Add a project
+- `POST /api/projects` - Add a project (auto-initializes config)
 - `GET /api/projects/{id}` - Get project status
 - `PATCH /api/projects/{id}` - Update project name
-- `DELETE /api/projects/{id}` - Remove project
-- `GET /api/projects/{id}/subscriptions` - List project subscriptions
+- `DELETE /api/projects/{id}` - Remove project (with data cleanup)
+
+### Project Subscriptions
+- `GET /api/projects/{id}/subscriptions` - List subscriptions
+- `POST /api/projects/{id}/subscriptions` - Create subscription
+- `GET /api/projects/{id}/subscriptions/{sub_id}` - Get subscription
+- `PATCH /api/projects/{id}/subscriptions/{sub_id}` - Update subscription
+- `DELETE /api/projects/{id}/subscriptions/{sub_id}` - Delete subscription
+- `POST /api/projects/{id}/subscriptions/{sub_id}/reactivate` - Reactivate
+
+### Scans
 - `POST /api/projects/{id}/scan` - Run scan
 - `POST /api/projects/{id}/apply-updates` - Apply proposals
 
@@ -210,7 +212,9 @@ Semantic subscriptions track code constructs by identity using Tree-sitter parsi
 
 ## Data Storage
 
-- **Per-project config**: `.codesub/config.json` in each git repo
-- **Server data**: `data/` directory in codesub project root (gitignored)
-  - `data/projects.json` - Registered projects
-  - `data/scan_history/<project_id>/<scan_id>.json` - Scan results
+All data is stored centrally in `data/` (configurable via `CODESUB_DATA_DIR` env var):
+- `data/projects.json` - Registered projects
+- `data/subscriptions/<project_id>/subscriptions.json` - Per-project subscriptions and config
+- `data/scan_history/<project_id>/<scan_id>.json` - Scan results
+
+**Note**: Target git repos remain clean (no `.codesub/` directory). If a legacy `.codesub/` exists, it will be auto-migrated on first access.

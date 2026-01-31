@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -14,7 +15,9 @@ from .git_repo import GitRepo
 from .models import Project, _utc_now
 
 # Local data directory within the codesub project
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+# Can be overridden via CODESUB_DATA_DIR environment variable
+_default_data_dir = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(os.environ.get("CODESUB_DATA_DIR", _default_data_dir))
 PROJECTS_FILE = "projects.json"
 
 
@@ -122,13 +125,6 @@ class ProjectStore:
         except Exception:
             raise InvalidProjectPathError(str(abs_path), "not a git repository")
 
-        # Validate codesub is initialized
-        store = ConfigStore(repo.root)
-        if not store.exists():
-            raise InvalidProjectPathError(
-                str(abs_path), "codesub not initialized (run 'codesub init' in the repo)"
-            )
-
         # Use file lock to prevent race conditions during concurrent adds
         with self._lock():
             # Check for duplicates (inside lock to ensure consistency)
@@ -147,14 +143,24 @@ class ProjectStore:
             data["projects"].append(project.to_dict())
             self._save_data(data)
 
+        # Auto-initialize config store with HEAD as baseline
+        # (done outside lock since it doesn't modify projects.json)
+        config_store = ConfigStore(project.id, self.config_dir)
+        config_store.set_repo_root(repo.root)
+        if not config_store.exists():
+            head = repo.head()
+            config_store.init(head)
+
         return project
 
-    def remove_project(self, project_id: str) -> Project:
+    def remove_project(self, project_id: str, keep_data: bool = False) -> Project:
         """
         Remove a project from the registry.
 
         Args:
             project_id: Project ID.
+            keep_data: If True, preserve subscription and scan history data.
+                       If False (default), delete all associated data.
 
         Returns:
             The removed Project.
@@ -170,6 +176,19 @@ class ProjectStore:
                 if p["id"] == project_id:
                     removed = Project.from_dict(projects.pop(i))
                     self._save_data(data)
+
+                    # Clean up associated data unless keep_data=True
+                    if not keep_data:
+                        # Remove subscription data
+                        subs_dir = self.config_dir / "subscriptions" / project_id
+                        if subs_dir.exists():
+                            shutil.rmtree(subs_dir)
+
+                        # Remove scan history data
+                        history_dir = self.config_dir / "scan_history" / project_id
+                        if history_dir.exists():
+                            shutil.rmtree(history_dir)
+
                     return removed
 
             raise ProjectNotFoundError(project_id)
@@ -210,7 +229,7 @@ class ProjectStore:
         - subscription_count: Number of active subscriptions
         - baseline_ref: Current baseline ref
         - path_exists: Whether path still exists
-        - codesub_initialized: Whether .codesub exists
+        - codesub_initialized: Whether config exists in central storage
         """
         project = self.get_project(project_id)
         abs_path = Path(project.path)
@@ -228,7 +247,8 @@ class ProjectStore:
 
         try:
             repo = GitRepo(abs_path)
-            store = ConfigStore(repo.root)
+            store = ConfigStore(project_id, self.config_dir)
+            store.set_repo_root(repo.root)  # Triggers migration if needed
             status["codesub_initialized"] = store.exists()
 
             if store.exists():

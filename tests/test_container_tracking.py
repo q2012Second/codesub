@@ -978,32 +978,37 @@ class TestFormatSubscription:
 class TestCLIContainerFlags:
     """Test CLI integration for container flags."""
 
-    def test_cli_add_with_include_members(self, container_repo: Path):
-        """CLI add with --include-members creates container subscription."""
-        import subprocess
+    def _run_cli(self, args: list[str], cwd: Path, data_dir: Path) -> subprocess.CompletedProcess:
+        """Run codesub CLI with CODESUB_DATA_DIR set."""
+        import os
         import sys
-
-        # Initialize codesub
-        subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "init"],
-            cwd=container_repo, capture_output=True, check=True
+        env = os.environ.copy()
+        env["CODESUB_DATA_DIR"] = str(data_dir)
+        return subprocess.run(
+            [sys.executable, "-m", "codesub.cli"] + args,
+            cwd=cwd, capture_output=True, text=True, env=env
         )
 
+    def test_cli_add_with_include_members(self, container_repo: Path, tmp_path: Path):
+        """CLI add with --include-members creates container subscription."""
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        # Register project
+        result = self._run_cli(["projects", "add", str(container_repo)], container_repo, data_dir)
+        assert result.returncode == 0
+
         # Add container subscription
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "add",
-             "models.py::User", "--include-members"],
-            cwd=container_repo, capture_output=True, text=True
+        result = self._run_cli(
+            ["add", "models.py::User", "--include-members"],
+            container_repo, data_dir
         )
 
         assert result.returncode == 0
         assert "Added semantic subscription" in result.stdout
 
         # List and verify
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "list", "--json"],
-            cwd=container_repo, capture_output=True, text=True
-        )
+        result = self._run_cli(["list", "--json"], container_repo, data_dir)
         import json
         data = json.loads(result.stdout)
         assert len(data) == 1
@@ -1012,28 +1017,23 @@ class TestCLIContainerFlags:
         assert sub["semantic"]["baseline_members"] is not None
         assert len(sub["semantic"]["baseline_members"]) > 0
 
-    def test_cli_add_with_include_private(self, container_repo: Path):
+    def test_cli_add_with_include_private(self, container_repo: Path, tmp_path: Path):
         """CLI add with --include-private includes private members."""
-        import subprocess
-        import sys
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-        subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "init"],
-            cwd=container_repo, capture_output=True, check=True
-        )
+        # Register project
+        result = self._run_cli(["projects", "add", str(container_repo)], container_repo, data_dir)
+        assert result.returncode == 0
 
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "add",
-             "models.py::User", "--include-members", "--include-private"],
-            cwd=container_repo, capture_output=True, text=True
+        result = self._run_cli(
+            ["add", "models.py::User", "--include-members", "--include-private"],
+            container_repo, data_dir
         )
 
         assert result.returncode == 0
 
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "list", "--json"],
-            cwd=container_repo, capture_output=True, text=True
-        )
+        result = self._run_cli(["list", "--json"], container_repo, data_dir)
         import json
         data = json.loads(result.stdout)
         sub = data[0]
@@ -1041,48 +1041,41 @@ class TestCLIContainerFlags:
         # Should have private members
         assert "_secret" in sub["semantic"]["baseline_members"]
 
-    def test_cli_add_with_no_track_decorators(self, container_repo: Path):
+    def test_cli_add_with_no_track_decorators(self, container_repo: Path, tmp_path: Path):
         """CLI add with --no-track-decorators disables decorator tracking."""
-        import subprocess
-        import sys
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-        subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "init"],
-            cwd=container_repo, capture_output=True, check=True
-        )
+        # Register project
+        result = self._run_cli(["projects", "add", str(container_repo)], container_repo, data_dir)
+        assert result.returncode == 0
 
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "add",
-             "models.py::User", "--include-members", "--no-track-decorators"],
-            cwd=container_repo, capture_output=True, text=True
+        result = self._run_cli(
+            ["add", "models.py::User", "--include-members", "--no-track-decorators"],
+            container_repo, data_dir
         )
 
         assert result.returncode == 0
 
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "list", "--json"],
-            cwd=container_repo, capture_output=True, text=True
-        )
+        result = self._run_cli(["list", "--json"], container_repo, data_dir)
         import json
         data = json.loads(result.stdout)
         sub = data[0]
         assert sub["semantic"]["track_decorators"] is False
 
-    def test_cli_rejects_include_members_for_non_container(self, container_repo: Path):
+    def test_cli_rejects_include_members_for_non_container(self, container_repo: Path, tmp_path: Path):
         """CLI rejects --include-members for non-container construct."""
-        import subprocess
-        import sys
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
 
-        subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "init"],
-            cwd=container_repo, capture_output=True, check=True
-        )
+        # Register project
+        result = self._run_cli(["projects", "add", str(container_repo)], container_repo, data_dir)
+        assert result.returncode == 0
 
         # Try to add a method with --include-members
-        result = subprocess.run(
-            [sys.executable, "-m", "codesub.cli", "add",
-             "models.py::User.validate", "--include-members"],
-            cwd=container_repo, capture_output=True, text=True
+        result = self._run_cli(
+            ["add", "models.py::User.validate", "--include-members"],
+            container_repo, data_dir
         )
 
         assert result.returncode == 1

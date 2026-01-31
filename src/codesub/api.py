@@ -336,14 +336,8 @@ def get_project_store_and_repo(project_id: str) -> tuple[ConfigStore, GitRepo]:
     project = project_store.get_project(project_id)
 
     repo = GitRepo(project.path)
-    store = ConfigStore(repo.root)
-    return store, repo
-
-
-def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
-    """Get ConfigStore and GitRepo for the current directory."""
-    repo = GitRepo()
-    store = ConfigStore(repo.root)
+    store = ConfigStore(project_id)  # Use project_id, not repo.root
+    store.set_repo_root(repo.root)   # Set repo root for migration/operations
     return store, repo
 
 
@@ -588,118 +582,23 @@ async def codesub_error_handler(request: Request, exc: CodesubError) -> JSONResp
 # --- Endpoints ---
 
 
-@app.get("/api/subscriptions", response_model=SubscriptionListResponse)
-def list_subscriptions(include_inactive: bool = Query(default=False)):
-    """List all subscriptions, optionally including inactive ones."""
-    store, repo = get_store_and_repo()
-    config = store.load()
-    subs = store.list_subscriptions(include_inactive=include_inactive)
-    baseline_title = repo.commit_title(config.repo.baseline_ref) if config.repo.baseline_ref else ""
-    return SubscriptionListResponse(
-        subscriptions=[subscription_to_schema(s) for s in subs],
-        count=len(subs),
-        baseline_ref=config.repo.baseline_ref,
-        baseline_title=baseline_title,
-    )
-
-
-@app.get("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
-def get_subscription(sub_id: str):
-    """Get a single subscription by ID (supports partial ID matching)."""
-    store, _ = get_store_and_repo()
-    sub = store.get_subscription(sub_id)
-    return subscription_to_schema(sub)
-
-
-@app.post("/api/subscriptions", response_model=SubscriptionSchema, status_code=201)
-def create_subscription(request: SubscriptionCreateRequest):
-    """Create a new subscription (line-based or semantic)."""
-    store, repo = get_store_and_repo()
-    config = store.load()
-    baseline = config.repo.baseline_ref
-
-    sub = _create_subscription_from_request(store, repo, baseline, request)
-    store.add_subscription(sub)
-    return subscription_to_schema(sub)
-
-
-@app.patch("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
-def update_subscription(sub_id: str, request: SubscriptionUpdateRequest):
-    """Update subscription label and/or description.
-
-    PATCH semantics:
-    - Omitted field: keep existing value
-    - Empty string "": clear to null
-    - Explicit null: clear to null
-    """
-    store, _ = get_store_and_repo()
-    sub = store.get_subscription(sub_id)
-
-    # Get the fields that were actually sent in the request
-    update_data = request.model_dump(exclude_unset=True)
-
-    # Update fields if provided
-    if "label" in update_data:
-        # Empty string becomes None
-        sub.label = request.label if request.label else None
-    if "description" in update_data:
-        # Empty string becomes None
-        sub.description = request.description if request.description else None
-    if "trigger_on_duplicate" in update_data:
-        sub.trigger_on_duplicate = request.trigger_on_duplicate
-
-    store.update_subscription(sub)
-    return subscription_to_schema(sub)
-
-
-@app.delete("/api/subscriptions/{sub_id}", response_model=SubscriptionSchema)
-def delete_subscription(sub_id: str, hard: bool = Query(default=False)):
-    """Delete (deactivate or hard delete) a subscription."""
-    store, _ = get_store_and_repo()
-    sub = store.remove_subscription(sub_id, hard=hard)
-    return subscription_to_schema(sub)
-
-
-@app.post("/api/subscriptions/{sub_id}/reactivate", response_model=SubscriptionSchema)
-def reactivate_subscription(sub_id: str):
-    """Reactivate a deactivated subscription."""
-    store, _ = get_store_and_repo()
-    sub = store.get_subscription(sub_id)
-
-    if sub.active:
-        raise HTTPException(status_code=400, detail="Subscription is already active")
-
-    sub.active = True
-    store.update_subscription(sub)
-    return subscription_to_schema(sub)
-
-
 @app.get("/api/health")
 def health_check():
-    """Health check endpoint. Always returns 200."""
+    """
+    Health check endpoint.
+
+    Returns basic service status. Project-agnostic.
+    """
+    project_store = get_project_store()
     try:
-        store, repo = get_store_and_repo()
-        config_exists = store.exists()
-        baseline_ref = None
-        if config_exists:
-            config = store.load()
-            baseline_ref = config.repo.baseline_ref
+        projects = project_store.list_projects()
         return {
             "status": "ok",
-            "config_initialized": config_exists,
-            "repo_root": str(repo.root),
-            "baseline_ref": baseline_ref,
-        }
-    except NotAGitRepoError:
-        return {
-            "status": "error",
-            "config_initialized": False,
-            "detail": "Not running in a git repository",
+            "project_count": len(projects),
         }
     except Exception as e:
         return {
             "status": "error",
-            "config_initialized": False,
             "detail": str(e),
         }
 
@@ -749,10 +648,15 @@ def update_project(project_id: str, request: ProjectUpdateRequest):
 
 
 @app.delete("/api/projects/{project_id}", response_model=ProjectSchema)
-def delete_project(project_id: str):
-    """Remove a project from the registry."""
+def delete_project(project_id: str, keep_data: bool = Query(default=False)):
+    """
+    Remove a project from the registry.
+
+    By default, deletes subscription and scan history data.
+    Use keep_data=true to preserve the data.
+    """
     store = get_project_store()
-    project = store.remove_project(project_id)
+    project = store.remove_project(project_id, keep_data=keep_data)
     return ProjectSchema(**project.to_dict())
 
 

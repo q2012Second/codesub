@@ -8,13 +8,13 @@ class CodesubError(Exception):
 
 
 class ConfigNotFoundError(CodesubError):
-    """Raised when .codesub/subscriptions.json doesn't exist."""
+    """Raised when subscription config doesn't exist."""
 
     def __init__(self, path: str | None = None):
         self.path = path
-        msg = "Config not initialized. Run 'codesub init' first."
+        msg = "Config not found. Register the project first with 'codesub projects add <path>'."
         if path:
-            msg = f"Config not found at {path}. Run 'codesub init' first."
+            msg = f"Config not found at {path}. Register the project first."
         super().__init__(msg)
 
 
@@ -134,3 +134,15 @@ class UnsupportedLanguageError(CodesubError):
         if hint:
             msg = f"{msg} {hint}"
         super().__init__(msg)
+
+
+class ProjectNotRegisteredError(CodesubError):
+    """Raised when a command is run in an unregistered project directory."""
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(
+            f"Project at '{path}' is not registered.\n"
+            f"Run 'codesub projects add .' to register the current directory, "
+            f"or 'codesub projects add {path}' to register this path."
+        )

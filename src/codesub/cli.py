@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import __version__
 from .config_store import ConfigStore
-from .errors import CodesubError
+from .errors import CodesubError, ProjectNotRegisteredError
 from .git_repo import GitRepo
 from .models import Anchor, SemanticTarget, Subscription
 from .utils import (
@@ -21,38 +21,31 @@ from .project_store import ProjectStore
 from .scan_history import ScanHistory
 
 
-def get_store_and_repo() -> tuple[ConfigStore, GitRepo]:
-    """Get ConfigStore and GitRepo for the current directory."""
-    repo = GitRepo()
-    store = ConfigStore(repo.root)
-    return store, repo
+def get_project_for_cwd() -> tuple[str, ConfigStore, GitRepo]:
+    """
+    Find registered project matching current working directory.
 
+    Returns:
+        Tuple of (project_id, ConfigStore, GitRepo)
 
-def cmd_init(args: argparse.Namespace) -> int:
-    """Initialize codesub in the current repository."""
-    try:
-        repo = GitRepo()
-        store = ConfigStore(repo.root)
+    Raises:
+        ProjectNotRegisteredError: If cwd is not a registered project.
+    """
+    repo = GitRepo()  # Uses cwd
+    project_store = ProjectStore()
+    for project in project_store.list_projects():
+        if Path(project.path).resolve() == repo.root.resolve():
+            store = ConfigStore(project.id)
+            store.set_repo_root(repo.root)
+            return project.id, store, repo
 
-        # Resolve baseline ref
-        baseline = args.baseline or "HEAD"
-        baseline_hash = repo.resolve_ref(baseline)
-
-        config = store.init(baseline_hash, force=args.force)
-
-        print(f"Initialized codesub at {store.config_dir}")
-        print(f"Baseline: {baseline_hash[:12]} ({baseline})")
-        return 0
-
-    except CodesubError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
+    raise ProjectNotRegisteredError(str(repo.root))
 
 
 def cmd_add(args: argparse.Namespace) -> int:
     """Add a new subscription."""
     try:
-        store, repo = get_store_and_repo()
+        _, store, repo = get_project_for_cwd()
         config = store.load()
         baseline = config.repo.baseline_ref
 
@@ -251,7 +244,7 @@ def _add_semantic_subscription(
 def cmd_list(args: argparse.Namespace) -> int:
     """List all subscriptions."""
     try:
-        store, _ = get_store_and_repo()
+        _, store, _ = get_project_for_cwd()
         config = store.load()
 
         subs = config.subscriptions
@@ -282,7 +275,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 def cmd_remove(args: argparse.Namespace) -> int:
     """Remove a subscription."""
     try:
-        store, _ = get_store_and_repo()
+        _, store, _ = get_project_for_cwd()
 
         sub = store.remove_subscription(args.subscription_id, hard=args.hard)
 
@@ -301,7 +294,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan for changes and report triggered subscriptions."""
     try:
-        store, repo = get_store_and_repo()
+        _, store, repo = get_project_for_cwd()
         config = store.load()
 
         # Import detector here to avoid circular imports during module load
@@ -388,7 +381,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def cmd_apply_updates(args: argparse.Namespace) -> int:
     """Apply update proposals from an update document."""
     try:
-        store, repo = get_store_and_repo()
+        _, store, repo = get_project_for_cwd()
 
         from .updater import Updater
 
@@ -469,9 +462,10 @@ def cmd_projects_add(args: argparse.Namespace) -> int:
         store = ProjectStore()
         project = store.add_project(path=args.path, name=args.name)
 
-        print(f"Added project: {project.id[:8]}")
+        print(f"Registered project: {project.id[:8]}")
         print(f"  Name: {project.name}")
         print(f"  Path: {project.path}")
+        print("  Config initialized with HEAD as baseline.")
 
         return 0
 
@@ -484,9 +478,12 @@ def cmd_projects_remove(args: argparse.Namespace) -> int:
     """Remove a project."""
     try:
         store = ProjectStore()
-        project = store.remove_project(args.project_id)
+        keep_data = getattr(args, 'keep_data', False)
+        project = store.remove_project(args.project_id, keep_data=keep_data)
 
         print(f"Removed project: {project.id[:8]} ({project.name})")
+        if not keep_data:
+            print("  Subscription and scan history data deleted.")
 
         return 0
 
@@ -517,7 +514,7 @@ def cmd_scan_history_clear(args: argparse.Namespace) -> int:
 def cmd_symbols(args: argparse.Namespace) -> int:
     """List discoverable code constructs in a file."""
     try:
-        store, repo = get_store_and_repo()
+        _, store, repo = get_project_for_cwd()
         config = store.load()
 
         ref = args.ref or config.repo.baseline_ref
@@ -588,16 +585,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
 
-        # Verify we're in a git repo
-        repo = GitRepo()
-        store = ConfigStore(repo.root)
-
-        if not store.exists():
-            print("Warning: codesub not initialized. Run 'codesub init' first.", file=sys.stderr)
-            print("Starting server anyway...", file=sys.stderr)
+        project_store = ProjectStore()
+        project_count = len(project_store.list_projects())
 
         print("Starting codesub API server...")
-        print(f"Repository: {repo.root}")
+        print(f"Registered projects: {project_count}")
         print(f"API docs: http://{args.host}:{args.port}/docs")
         print()
 
@@ -632,15 +624,6 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
-
-    # init
-    init_parser = subparsers.add_parser("init", help="Initialize codesub in the repository")
-    init_parser.add_argument(
-        "--baseline", "-b", help="Baseline ref (default: HEAD)"
-    )
-    init_parser.add_argument(
-        "--force", "-f", action="store_true", help="Overwrite existing config"
-    )
 
     # add
     add_parser = subparsers.add_parser("add", help="Add a new subscription")
@@ -770,6 +753,11 @@ def create_parser() -> argparse.ArgumentParser:
     # projects remove
     projects_remove_parser = projects_subparsers.add_parser("remove", help="Remove a project")
     projects_remove_parser.add_argument("project_id", help="Project ID")
+    projects_remove_parser.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="Preserve subscription and scan history data after removing project"
+    )
 
     # scan-history
     scan_history_parser = subparsers.add_parser("scan-history", help="Manage scan history")
@@ -814,7 +802,6 @@ def main() -> int:
             return cmd_scan_history_clear(args)
 
     commands = {
-        "init": cmd_init,
         "add": cmd_add,
         "list": cmd_list,
         "remove": cmd_remove,
