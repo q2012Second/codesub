@@ -407,6 +407,67 @@ class PythonIndexer:
         """Check if name follows CONSTANT_CASE convention."""
         return bool(re.match(r"^[A-Z][A-Z0-9_]*$", name))
 
+    def _extract_base_classes(
+        self,
+        superclasses_node: tree_sitter.Node | None,
+        source_bytes: bytes,
+    ) -> tuple[str, ...]:
+        """Extract base class names from superclasses node.
+
+        Parses nodes like: (User, Mixin, ABC)
+        Returns: ("User", "Mixin", "ABC")
+
+        Handles:
+        - Simple identifiers: class Foo(Bar)
+        - Attributes: class Foo(module.Bar) -> "module.Bar"
+        - Generics: class Foo(List[T]) -> "List"
+        - Does NOT include keyword args: class Foo(Base, metaclass=Meta) -> ("Base",)
+        """
+        if not superclasses_node:
+            return ()
+
+        base_names: list[str] = []
+
+        # superclasses node in tree-sitter-python is an argument_list
+        # Iterate through children to find base classes
+        for child in superclasses_node.children:
+            # Skip punctuation like parentheses, commas
+            if child.type in ("(", ")", ","):
+                continue
+
+            # Skip keyword arguments (metaclass=Meta, **kwargs)
+            if child.type == "keyword_argument":
+                continue
+
+            # Handle identifier: class Foo(Bar)
+            if child.type == "identifier":
+                base_names.append(self._node_text(child, source_bytes))
+
+            # Handle attribute: class Foo(module.Bar)
+            elif child.type == "attribute":
+                base_names.append(self._node_text(child, source_bytes))
+
+            # Handle subscript: class Foo(List[T]) -> extract "List"
+            elif child.type == "subscript":
+                # Get the base type (before [])
+                value = child.child_by_field_name("value")
+                if value:
+                    if value.type == "identifier":
+                        base_names.append(self._node_text(value, source_bytes))
+                    elif value.type == "attribute":
+                        base_names.append(self._node_text(value, source_bytes))
+
+            # Handle call: class Foo(SomeFactory()) - rare but possible
+            elif child.type == "call":
+                func = child.child_by_field_name("function")
+                if func:
+                    if func.type == "identifier":
+                        base_names.append(self._node_text(func, source_bytes))
+                    elif func.type == "attribute":
+                        base_names.append(self._node_text(func, source_bytes))
+
+        return tuple(base_names)
+
     def _parse_class_container(
         self,
         class_node: tree_sitter.Node,
@@ -454,6 +515,9 @@ class PythonIndexer:
                 if child.type == "decorator":
                     decorators.append(self._node_text(child, source_bytes))
 
+        # Extract base classes for inheritance tracking
+        base_classes = self._extract_base_classes(superclasses, source_bytes)
+
         # interface_hash: decorators + base classes (inheritance)
         bases_text = self._node_text(superclasses, source_bytes) if superclasses else ""
         interface_hash = compute_interface_hash(
@@ -478,6 +542,7 @@ class PythonIndexer:
             interface_hash=interface_hash,
             body_hash=body_hash,
             has_parse_error=has_errors,
+            base_classes=base_classes if base_classes else None,
         )
 
     def get_container_members(
@@ -518,3 +583,119 @@ class PythonIndexer:
                 members.append(c)
 
         return members
+
+    def extract_imports(self, source: str) -> dict[str, tuple[str, str]]:
+        """Extract import mappings from source using Tree-sitter.
+
+        Returns dict mapping local name to (module, original_name).
+        Example: {"User": ("models", "User"), "U": ("models", "User")}
+
+        Handles:
+        - from models import User
+        - from models import User as U
+        - import models
+        - import models as m
+        - from . import sibling
+        - from ..parent import Something
+        - Multi-line imports: from x import (A, B, C)
+        - Star imports are skipped (cannot resolve)
+        """
+        tree = self._parser.parse(source.encode())
+        source_bytes = source.encode()
+        import_map: dict[str, tuple[str, str]] = {}
+
+        for child in tree.root_node.children:
+            if child.type == "import_statement":
+                # import module [as alias]
+                # Structure: import_statement { dotted_name [, dotted_name] }
+                # Or with alias: import_statement { dotted_name, "as", identifier }
+                self._parse_import_statement(child, source_bytes, import_map)
+
+            elif child.type == "import_from_statement":
+                # from module import name [as alias], ...
+                self._parse_import_from_statement(child, source_bytes, import_map)
+
+        return import_map
+
+    def _parse_import_statement(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        import_map: dict[str, tuple[str, str]],
+    ) -> None:
+        """Parse: import module [as alias]"""
+        i = 0
+        children = node.children
+        while i < len(children):
+            child = children[i]
+            if child.type == "dotted_name":
+                module = self._node_text(child, source_bytes)
+                alias = None
+                # Check for "as alias"
+                if i + 2 < len(children) and children[i + 1].type == "as":
+                    alias_node = children[i + 2]
+                    if alias_node.type == "identifier":
+                        alias = self._node_text(alias_node, source_bytes)
+                        i += 2  # Skip "as" and alias
+                local_name = alias if alias else module.split(".")[-1]
+                import_map[local_name] = (module, module.split(".")[-1])
+            elif child.type == "aliased_import":
+                # aliased_import { dotted_name, "as", identifier }
+                name_node = child.child_by_field_name("name")
+                alias_node = child.child_by_field_name("alias")
+                if name_node:
+                    module = self._node_text(name_node, source_bytes)
+                    if alias_node:
+                        alias = self._node_text(alias_node, source_bytes)
+                        import_map[alias] = (module, module.split(".")[-1])
+                    else:
+                        import_map[module.split(".")[-1]] = (module, module.split(".")[-1])
+            i += 1
+
+    def _parse_import_from_statement(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        import_map: dict[str, tuple[str, str]],
+    ) -> None:
+        """Parse: from module import name [as alias], ..."""
+        module = None
+        found_import_keyword = False
+
+        # Find the module name (first dotted_name before 'import' keyword)
+        for child in node.children:
+            if child.type == "import":
+                found_import_keyword = True
+                continue
+
+            if not found_import_keyword:
+                # Before 'import' keyword - looking for module name
+                if child.type == "dotted_name":
+                    module = self._node_text(child, source_bytes)
+                elif child.type == "relative_import":
+                    # Handle . or .. prefix with optional module name
+                    module = self._node_text(child, source_bytes)
+            else:
+                # After 'import' keyword - looking for imported names
+                if child.type == "wildcard_import":
+                    # Star import - can't resolve, skip
+                    continue
+                elif child.type == "aliased_import":
+                    # name as alias
+                    name_node = child.child_by_field_name("name")
+                    alias_node = child.child_by_field_name("alias")
+                    if name_node and alias_node:
+                        original = self._node_text(name_node, source_bytes)
+                        alias = self._node_text(alias_node, source_bytes)
+                        import_map[alias] = (module, original)
+                    elif name_node:
+                        original = self._node_text(name_node, source_bytes)
+                        import_map[original] = (module, original)
+                elif child.type == "dotted_name":
+                    # Imported name: from x import Name
+                    name = self._node_text(child, source_bytes)
+                    import_map[name] = (module, name)
+                elif child.type == "identifier":
+                    # Direct import: from x import Name (single identifier)
+                    name = self._node_text(child, source_bytes)
+                    import_map[name] = (module, name)

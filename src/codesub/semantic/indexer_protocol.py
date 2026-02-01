@@ -69,3 +69,22 @@ class SemanticIndexer(Protocol):
             List of Construct objects that are direct members of the container.
         """
         ...
+
+    def extract_imports(self, source: str) -> dict[str, tuple[str, str]]:
+        """Extract import mappings from source.
+
+        Returns dict mapping local name to (module/package, original_name).
+
+        For Python:
+            {"User": ("models", "User"), "U": ("models", "User")}
+        For Java:
+            {"User": ("com.example.models.User", "User")}
+
+        Args:
+            source: The complete source code content.
+
+        Returns:
+            Dict mapping local imported name to (module_path, original_name).
+            Star/wildcard imports are skipped.
+        """
+        ...

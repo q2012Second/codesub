@@ -122,6 +122,9 @@ class JavaIndexer:
         superclass = node.child_by_field_name("superclass")
         interfaces = node.child_by_field_name("interfaces")
 
+        # Extract base classes for inheritance tracking
+        base_classes = self._extract_base_classes(superclass, interfaces, source_bytes)
+
         annotation_text = None
         parts = []
         if superclass:
@@ -153,6 +156,7 @@ class JavaIndexer:
                 interface_hash=interface_hash,
                 body_hash=body_hash,
                 has_parse_error=has_errors,
+                base_classes=base_classes if base_classes else None,
             )
         )
 
@@ -192,6 +196,10 @@ class JavaIndexer:
 
         # Get interfaces if enum implements any
         interfaces = node.child_by_field_name("interfaces")
+
+        # Extract base classes for inheritance tracking (enums can implement interfaces)
+        base_classes = self._extract_base_classes(None, interfaces, source_bytes)
+
         annotation_text = self._node_text(interfaces, source_bytes) if interfaces else None
 
         interface_hash = compute_interface_hash(
@@ -213,6 +221,7 @@ class JavaIndexer:
                 interface_hash=interface_hash,
                 body_hash=body_hash,
                 has_parse_error=has_errors,
+                base_classes=base_classes if base_classes else None,
             )
         )
 
@@ -522,6 +531,66 @@ class JavaIndexer:
         """Get text content of a node."""
         return source_bytes[node.start_byte:node.end_byte].decode()
 
+    def _extract_base_classes(
+        self,
+        superclass_node: tree_sitter.Node | None,
+        interfaces_node: tree_sitter.Node | None,
+        source_bytes: bytes,
+    ) -> tuple[str, ...]:
+        """Extract base class/interface names from extends/implements.
+
+        Java classes can extend one class and implement multiple interfaces.
+        Returns all as a single tuple (extends first, then implements).
+
+        Handles:
+        - extends BaseClass
+        - extends BaseClass<T>  (generic) -> "BaseClass"
+        - implements Interface1, Interface2
+        """
+        base_names: list[str] = []
+
+        # Handle extends (single class for classes, could be type_list for interfaces)
+        if superclass_node:
+            self._extract_type_names(superclass_node, source_bytes, base_names)
+
+        # Handle implements (interface list)
+        if interfaces_node:
+            # interfaces node contains type_list with type_identifiers
+            for child in interfaces_node.children:
+                if child.type == "type_list":
+                    for type_node in child.children:
+                        self._extract_type_names(type_node, source_bytes, base_names)
+                else:
+                    self._extract_type_names(child, source_bytes, base_names)
+
+        return tuple(base_names)
+
+    def _extract_type_names(
+        self,
+        node: tree_sitter.Node,
+        source_bytes: bytes,
+        result: list[str],
+    ) -> None:
+        """Extract type name from a type node, stripping generics.
+
+        Handles wrapper nodes (superclass, interfaces) by iterating through children.
+        """
+        if node.type == "type_identifier":
+            result.append(self._node_text(node, source_bytes))
+        elif node.type == "generic_type":
+            # Generic: List<T> -> extract "List"
+            for child in node.children:
+                if child.type == "type_identifier":
+                    result.append(self._node_text(child, source_bytes))
+                    break
+        elif node.type == "scoped_type_identifier":
+            # Qualified: com.example.User -> extract full path
+            result.append(self._node_text(node, source_bytes))
+        elif node.type in ("superclass", "type_list"):
+            # Wrapper nodes - iterate through children
+            for child in node.children:
+                self._extract_type_names(child, source_bytes, result)
+
     def get_container_members(
         self,
         source: str,
@@ -563,3 +632,48 @@ class JavaIndexer:
                 members.append(c)
 
         return members
+
+    def extract_imports(self, source: str) -> dict[str, tuple[str, str]]:
+        """Extract import mappings from Java source using Tree-sitter.
+
+        Returns dict mapping simple class name to (full_import_path, simple_name).
+        Example: {"User": ("com.example.models.User", "User")}
+
+        Handles:
+        - import com.example.User;
+        - Skips: import com.example.*; (wildcard - cannot resolve)
+        - Skips: import static com.example.Utils.helper; (static imports)
+        """
+        tree = self._parser.parse(source.encode())
+        source_bytes = source.encode()
+        import_map: dict[str, tuple[str, str]] = {}
+
+        for child in tree.root_node.children:
+            if child.type == "import_declaration":
+                # Check for static import or wildcard
+                is_static = False
+                is_wildcard = False
+
+                for part in child.children:
+                    if part.type == "static":
+                        is_static = True
+                    elif part.type == "asterisk":
+                        is_wildcard = True
+
+                # Skip static and wildcard imports
+                if is_static or is_wildcard:
+                    continue
+
+                # Find the scoped_identifier (full path)
+                for part in child.children:
+                    if part.type == "scoped_identifier":
+                        full_path = self._node_text(part, source_bytes)
+                        simple_name = full_path.split(".")[-1]
+                        import_map[simple_name] = (full_path, simple_name)
+                        break
+                    elif part.type == "identifier":
+                        # Single identifier import (rare but possible)
+                        name = self._node_text(part, source_bytes)
+                        import_map[name] = (name, name)
+
+        return import_map

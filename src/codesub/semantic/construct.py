@@ -39,6 +39,10 @@ class Construct:
         body_hash: Hash of the construct's body/value.
             Changes indicate content changes (implementation, value).
         has_parse_error: True if the file had parse errors.
+        base_classes: Base class names for class/interface/enum constructs.
+            Stores simple names as they appear in source: ("User", "Mixin").
+            For Java, includes both extends and implements.
+            None for non-class constructs (variables, methods, fields).
     """
 
     path: str
@@ -51,3 +55,4 @@ class Construct:
     interface_hash: str
     body_hash: str
     has_parse_error: bool = False
+    base_classes: tuple[str, ...] | None = None  # Base classes for class/interface/enum

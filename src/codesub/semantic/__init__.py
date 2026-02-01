@@ -3,6 +3,12 @@
 from ..errors import UnsupportedLanguageError
 from .construct import Construct
 from .fingerprint import compute_body_hash, compute_interface_hash
+from .inheritance import (
+    InheritanceChainEntry,
+    InheritanceResolver,
+    get_member_id,
+    get_overridden_members,
+)
 from .python_indexer import PythonIndexer
 from .registry import (
     detect_language,
@@ -39,4 +45,9 @@ __all__ = [
     # Fingerprinting
     "compute_body_hash",
     "compute_interface_hash",
+    # Inheritance resolution
+    "InheritanceResolver",
+    "InheritanceChainEntry",
+    "get_member_id",
+    "get_overridden_members",
 ]

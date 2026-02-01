@@ -1,6 +1,6 @@
 """Change detection for codesub."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .diff_parser import DiffParser, ranges_overlap
 from .git_repo import GitRepo
@@ -16,8 +16,6 @@ from .models import (
 )
 
 if TYPE_CHECKING:
-    from typing import Any
-
     from .semantic import Construct
     from .semantic.indexer_protocol import SemanticIndexer
 
@@ -469,6 +467,23 @@ class Detector:
                 else:
                     trigger = self._classify_semantic_change(sub, new_construct)
 
+                # Check for inherited changes (for class-level subscriptions)
+                if sub.semantic.kind in ("class", "interface", "enum"):
+                    inherited_trigger = self._check_inherited_changes(
+                        sub, new_construct, new_source, new_path,
+                        base_ref, target_ref, construct_cache
+                    )
+                    if inherited_trigger:
+                        if trigger:
+                            # Combine: direct change + inherited change
+                            trigger.details = trigger.details or {}
+                            trigger.details["inherited_changes"] = inherited_trigger.details.get("inherited_changes", [])
+                            trigger.details["inheritance_chain"] = inherited_trigger.details.get("inheritance_chain", [])
+                            if "inherited_member_changed" not in trigger.reasons:
+                                trigger.reasons.append("inherited_member_changed")
+                        else:
+                            trigger = inherited_trigger
+
                 proposal = None
 
                 if old_path != new_path:
@@ -522,6 +537,23 @@ class Detector:
                 else:
                     trigger = self._classify_semantic_change(sub, match)
 
+                # Check for inherited changes (for class-level subscriptions)
+                if sub.semantic.kind in ("class", "interface", "enum"):
+                    inherited_trigger = self._check_inherited_changes(
+                        sub, match, new_source, new_path,
+                        base_ref, target_ref, construct_cache
+                    )
+                    if inherited_trigger:
+                        if trigger:
+                            # Combine: direct change + inherited change
+                            trigger.details = trigger.details or {}
+                            trigger.details["inherited_changes"] = inherited_trigger.details.get("inherited_changes", [])
+                            trigger.details["inheritance_chain"] = inherited_trigger.details.get("inheritance_chain", [])
+                            if "inherited_member_changed" not in trigger.reasons:
+                                trigger.reasons.append("inherited_member_changed")
+                        else:
+                            trigger = inherited_trigger
+
                 proposal = Proposal(
                     subscription_id=sub.id,
                     subscription=sub,
@@ -548,26 +580,52 @@ class Detector:
             # Found in exactly one other file
             found_path, found_construct = cross_matches[0]
 
-            # For container subscriptions, need to index the file for member comparison
-            if sub.semantic.include_members:
-                # Get or cache the constructs for this file
-                cache_key = (found_path, sub.semantic.language)
-                if cache_key in construct_cache:
-                    found_constructs = construct_cache[cache_key]
-                else:
+            # Get or cache the source and constructs for this file
+            cache_key = (found_path, sub.semantic.language)
+            if cache_key in construct_cache:
+                found_constructs = construct_cache[cache_key]
+                # Need source for inheritance check - try to read it
+                try:
                     if target_ref:
                         found_source = "\n".join(self.repo.show_file(target_ref, found_path))
                     else:
                         with open(self.repo.root / found_path, encoding="utf-8") as f:
                             found_source = f.read()
-                    found_constructs = indexer.index_file(found_source, found_path)
-                    construct_cache[cache_key] = found_constructs
+                except (FileNotFoundError, PermissionError, UnicodeDecodeError, OSError):
+                    found_source = ""
+            else:
+                if target_ref:
+                    found_source = "\n".join(self.repo.show_file(target_ref, found_path))
+                else:
+                    with open(self.repo.root / found_path, encoding="utf-8") as f:
+                        found_source = f.read()
+                found_constructs = indexer.index_file(found_source, found_path)
+                construct_cache[cache_key] = found_constructs
 
+            # For container subscriptions, delegate to container member check
+            if sub.semantic.include_members:
                 trigger = self._check_container_members(
                     sub, found_source, found_path, indexer, found_construct, found_constructs
                 )
             else:
                 trigger = self._classify_semantic_change(sub, found_construct)
+
+            # Check for inherited changes (for class-level subscriptions)
+            if sub.semantic.kind in ("class", "interface", "enum") and found_source:
+                inherited_trigger = self._check_inherited_changes(
+                    sub, found_construct, found_source, found_path,
+                    base_ref, target_ref, construct_cache
+                )
+                if inherited_trigger:
+                    if trigger:
+                        # Combine: direct change + inherited change
+                        trigger.details = trigger.details or {}
+                        trigger.details["inherited_changes"] = inherited_trigger.details.get("inherited_changes", [])
+                        trigger.details["inheritance_chain"] = inherited_trigger.details.get("inheritance_chain", [])
+                        if "inherited_member_changed" not in trigger.reasons:
+                            trigger.reasons.append("inherited_member_changed")
+                    else:
+                        trigger = inherited_trigger
 
             # Set confidence based on match tier
             confidence = "high" if match_tier == "exact" else "medium" if match_tier == "body" else "low"
@@ -909,3 +967,291 @@ class Detector:
             return interface_matches, "interface"
 
         return [], "none"
+
+    def _check_inherited_changes(
+        self,
+        sub: Subscription,
+        current_construct: "Construct",
+        new_source: str,
+        new_path: str,
+        base_ref: str,
+        target_ref: str | None,
+        construct_cache: dict[tuple[str, str], list],
+    ) -> Trigger | None:
+        """Check if parent class changes affect this child class subscription.
+
+        Returns a trigger if:
+        1. A parent class member changed between base_ref and target_ref
+        2. The child does NOT override that member
+        3. No intermediate class in the chain overrides that member
+
+        Args:
+            sub: The subscription to check.
+            current_construct: The current construct for this subscription.
+            new_source: Current source code of the file.
+            new_path: Current file path.
+            base_ref: Base git ref.
+            target_ref: Target git ref (or None for working directory).
+            construct_cache: Cache of (path, language) -> constructs for target_ref.
+
+        Returns:
+            Trigger if inherited members changed, None otherwise.
+        """
+        from .semantic import (
+            InheritanceResolver,
+            get_indexer,
+            get_member_id,
+            get_overridden_members,
+        )
+
+        assert sub.semantic is not None
+
+        # Only applies to class/interface/enum subscriptions
+        if sub.semantic.kind not in ("class", "interface", "enum"):
+            return None
+
+        # Build inheritance resolver
+        indexer = get_indexer(sub.semantic.language)
+        resolver = InheritanceResolver(
+            repo_root=self.repo.root,
+            language=sub.semantic.language,
+            indexer=indexer,
+        )
+
+        # Add the current file to the resolver
+        cache_key = (new_path, sub.semantic.language)
+        if cache_key in construct_cache:
+            constructs = construct_cache[cache_key]
+        else:
+            constructs = indexer.index_file(new_source, new_path)
+            construct_cache[cache_key] = constructs
+
+        resolver.add_file(new_path, constructs, new_source)
+
+        # Get inheritance chain
+        chain = resolver.get_inheritance_chain(new_path, current_construct.qualname)
+
+        if not chain:
+            return None  # No parents, or parents not in repo
+
+        # Get child's member IDs (to check for overrides)
+        child_members = indexer.get_container_members(
+            new_source, new_path, current_construct.qualname,
+            include_private=True, constructs=constructs
+        )
+        child_member_ids = get_overridden_members(
+            child_members, current_construct.qualname, sub.semantic.language
+        )
+
+        # Track members that are overridden anywhere in the chain
+        # This handles intermediate overrides: if B overrides A.foo, C(B) shouldn't trigger on A.foo
+        overridden_in_chain: set[str] = set(child_member_ids)
+
+        # Check each parent in chain for changes
+        inherited_changes: list[dict[str, Any]] = []
+
+        for entry in chain:
+            parent_path = entry.path
+            parent_qualname = entry.qualname
+
+            # Detect changes in this parent between refs
+            parent_changes = self._detect_parent_member_changes(
+                parent_path, parent_qualname,
+                base_ref, target_ref,
+                sub.semantic.language,
+            )
+
+            for change in parent_changes:
+                member_name = change.get("member_name")
+                if member_name:
+                    member_id = get_member_id(member_name, sub.semantic.language)
+                    if member_id in overridden_in_chain:
+                        # This member is overridden by child or intermediate class, skip
+                        continue
+
+                # This inherited member changed and is not overridden
+                inherited_changes.append({
+                    **change,
+                    "parent_path": parent_path,
+                    "parent_qualname": parent_qualname,
+                })
+
+            # Update overridden_in_chain with this parent's members
+            # (for checking grandparent changes)
+            try:
+                if target_ref:
+                    parent_source = "\n".join(self.repo.show_file(target_ref, parent_path))
+                else:
+                    parent_source = (self.repo.root / parent_path).read_text(encoding="utf-8")
+
+                parent_cache_key = (parent_path, sub.semantic.language)
+                if parent_cache_key in construct_cache:
+                    parent_constructs = construct_cache[parent_cache_key]
+                else:
+                    parent_constructs = indexer.index_file(parent_source, parent_path)
+                    construct_cache[parent_cache_key] = parent_constructs
+
+                parent_members = indexer.get_container_members(
+                    parent_source, parent_path, parent_qualname,
+                    include_private=True, constructs=parent_constructs
+                )
+                parent_member_ids = get_overridden_members(
+                    parent_members, parent_qualname, sub.semantic.language
+                )
+                overridden_in_chain.update(parent_member_ids)
+            except (FileNotFoundError, OSError, UnicodeDecodeError):
+                pass  # Parent file not readable, continue
+
+        if not inherited_changes:
+            return None
+
+        # Determine overall change type from inherited changes
+        has_structural = any(c.get("change_type") == "STRUCTURAL" for c in inherited_changes)
+        has_missing = any(c.get("change_type") == "MISSING" for c in inherited_changes)
+        if has_missing:
+            change_type = "STRUCTURAL"  # Parent deletion is structural
+        elif has_structural:
+            change_type = "STRUCTURAL"
+        else:
+            change_type = "CONTENT"
+
+        # Build trigger with inheritance metadata
+        return Trigger(
+            subscription_id=sub.id,
+            subscription=sub,
+            path=new_path,
+            start_line=current_construct.start_line,
+            end_line=current_construct.end_line,
+            reasons=["inherited_member_changed"],
+            matching_hunks=[],
+            change_type=change_type,
+            details={
+                "source": "inherited",
+                "inherited_changes": inherited_changes,
+                "inheritance_chain": [
+                    {"path": e.path, "qualname": e.qualname}
+                    for e in chain
+                ],
+            },
+        )
+
+    def _detect_parent_member_changes(
+        self,
+        parent_path: str,
+        parent_qualname: str,
+        base_ref: str,
+        target_ref: str | None,
+        language: str,
+    ) -> list[dict[str, Any]]:
+        """Detect changes in a parent class between refs.
+
+        Compares parent class members at base_ref vs target_ref.
+
+        Args:
+            parent_path: Path to the parent class file.
+            parent_qualname: Qualified name of the parent class.
+            base_ref: Base git ref.
+            target_ref: Target git ref (or None for working directory).
+            language: Programming language.
+
+        Returns:
+            List of change dicts with member_name, change_type, etc.
+        """
+        from .errors import UnsupportedLanguageError
+        from .semantic import get_indexer
+
+        changes: list[dict[str, Any]] = []
+
+        try:
+            indexer = get_indexer(language)
+        except UnsupportedLanguageError:
+            return changes
+
+        # Get parent at base_ref
+        try:
+            base_source = "\n".join(self.repo.show_file(base_ref, parent_path))
+            base_constructs = indexer.index_file(base_source, parent_path)
+        except Exception:
+            return changes  # Parent didn't exist at base_ref
+
+        # Get parent at target_ref
+        try:
+            if target_ref:
+                target_source = "\n".join(self.repo.show_file(target_ref, parent_path))
+            else:
+                target_source = (self.repo.root / parent_path).read_text(encoding="utf-8")
+            target_constructs = indexer.index_file(target_source, parent_path)
+        except Exception:
+            # Parent deleted or unreadable at target
+            changes.append({
+                "member_name": None,
+                "change_type": "MISSING",
+                "qualname": parent_qualname,
+                "reason": "parent_deleted",
+            })
+            return changes
+
+        # Build member lookup
+        prefix = parent_qualname + "."
+        base_members = {
+            c.qualname[len(prefix):]: c
+            for c in base_constructs
+            if c.qualname.startswith(prefix) and "." not in c.qualname[len(prefix):]
+        }
+        target_members = {
+            c.qualname[len(prefix):]: c
+            for c in target_constructs
+            if c.qualname.startswith(prefix) and "." not in c.qualname[len(prefix):]
+        }
+
+        # Check for removed members
+        for name in base_members:
+            if name not in target_members:
+                changes.append({
+                    "member_name": name,
+                    "change_type": "MISSING",
+                    "qualname": f"{parent_qualname}.{name}",
+                    "reason": "member_removed",
+                })
+
+        # Check for changed members
+        for name, base_c in base_members.items():
+            if name not in target_members:
+                continue
+            target_c = target_members[name]
+
+            if base_c.interface_hash != target_c.interface_hash:
+                changes.append({
+                    "member_name": name,
+                    "change_type": "STRUCTURAL",
+                    "qualname": f"{parent_qualname}.{name}",
+                    "reason": "interface_changed",
+                })
+            elif base_c.body_hash != target_c.body_hash:
+                changes.append({
+                    "member_name": name,
+                    "change_type": "CONTENT",
+                    "qualname": f"{parent_qualname}.{name}",
+                    "reason": "body_changed",
+                })
+
+        # Check parent class itself (inheritance changes, decorators)
+        base_parent = next(
+            (c for c in base_constructs if c.qualname == parent_qualname),
+            None
+        )
+        target_parent = next(
+            (c for c in target_constructs if c.qualname == parent_qualname),
+            None
+        )
+
+        if base_parent and target_parent:
+            if base_parent.interface_hash != target_parent.interface_hash:
+                changes.append({
+                    "member_name": None,
+                    "change_type": "STRUCTURAL",
+                    "qualname": parent_qualname,
+                    "reason": "parent_interface_changed",
+                })
+
+        return changes
