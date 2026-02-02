@@ -1,2 +1,10 @@
 0000000000000000000000000000000000000000 f69eae21dd1d7bffbb8f57c343bb3d29d957135c Test User <test@example.com> 1769611635 +0200	commit (initial): Initial commit: Order management API (Java)
 f69eae21dd1d7bffbb8f57c343bb3d29d957135c 16da78132597f4e4e65d1853a39f4e3206ba82cd Test User <test@example.com> 1769611742 +0200	commit: Change FREE_SHIPPING_THRESHOLD to 100.00
+16da78132597f4e4e65d1853a39f4e3206ba82cd 984e71f7381b4a44e7ea0dbcda3424b6a45bc81c Test User <test@example.com> 1770019154 +0200	commit: Add CustomerPreference entity with JPA annotations
+984e71f7381b4a44e7ea0dbcda3424b6a45bc81c dea111908784fb2df32f1b6263b74138c653928d Test User <test@example.com> 1770019223 +0200	commit: Increase preference value column length to 1000
+dea111908784fb2df32f1b6263b74138c653928d 984e71f7381b4a44e7ea0dbcda3424b6a45bc81c Test User <test@example.com> 1770019230 +0200	reset: moving to HEAD~1
+984e71f7381b4a44e7ea0dbcda3424b6a45bc81c 6170354fa41008ba11fe40346725f0f975844537 Test User <test@example.com> 1770019246 +0200	commit: Increase preference value column length to 1000
+6170354fa41008ba11fe40346725f0f975844537 984e71f7381b4a44e7ea0dbcda3424b6a45bc81c Test User <test@example.com> 1770019257 +0200	reset: moving to HEAD~1
+984e71f7381b4a44e7ea0dbcda3424b6a45bc81c 02f45356e7ea28de55e79fc9f95a9a354dfbafe4 Test User <test@example.com> 1770019296 +0200	commit: Add .gitignore to exclude git_template
+02f45356e7ea28de55e79fc9f95a9a354dfbafe4 f9d9fb27104ff6c2c04bbd32ecae3485c6c16b55 Test User <test@example.com> 1770019690 +0200	commit: Increase preference value length
+f9d9fb27104ff6c2c04bbd32ecae3485c6c16b55 02f45356e7ea28de55e79fc9f95a9a354dfbafe4 Test User <test@example.com> 1770020374 +0200	reset: moving to HEAD~1

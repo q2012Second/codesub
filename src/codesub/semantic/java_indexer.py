@@ -498,10 +498,15 @@ class JavaIndexer:
         """Get annotation decorators for a node."""
         annotations: list[str] = []
 
-        # Look for annotations as previous siblings or first children
+        # Look for annotations as direct children or inside modifiers node
         for child in node.children:
             if child.type in ("marker_annotation", "annotation"):
                 annotations.append(self._node_text(child, source_bytes))
+            elif child.type == "modifiers":
+                # Java often puts annotations inside the modifiers node
+                for mod in child.children:
+                    if mod.type in ("marker_annotation", "annotation"):
+                        annotations.append(self._node_text(mod, source_bytes))
 
         return annotations
 

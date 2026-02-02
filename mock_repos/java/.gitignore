@@ -1,0 +1,2 @@
+# Ignore git template directory (used for mock repo initialization)
+.git_template/

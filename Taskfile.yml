@@ -851,8 +851,13 @@ tasks:
           {{.CODESUB}} add "{{.SRC_PREFIX}}/config/AppConfig.java::AppConfig.FREE_SHIPPING_THRESHOLD" --label "Free shipping threshold"
           {{.CODESUB}} add "{{.SRC_PREFIX}}/config/AppConfig.java::AppConfig.TAX_RATES" --label "Tax rates"
 
+          # --- JPA Entity Annotations ---
           echo ""
-          echo "Created 11 Java subscriptions"
+          echo "JPA entity annotations (tracks @Column property changes):"
+          {{.CODESUB}} add "{{.SRC_PREFIX}}/model/CustomerPreference.java::CustomerPreference.preferenceValue" --label "Preference value column schema"
+
+          echo ""
+          echo "Created 12 Java subscriptions"
         fi
       - |
         echo ""
